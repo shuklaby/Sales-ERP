@@ -1,0 +1,638 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'shukla.by@gmail.com' ||
+        request.auth.token.email == 'admin@sparkgen.com' ||
+        request.auth.token.email == 'admin@sparkgentechnology.com' ||
+        request.auth.token.email == 'admin@salessphere.com' ||
+        (request.auth.token.email != null && request.auth.token.email.matches('.*admin.*')) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+        (request.auth.token.firebase.sign_in_provider == 'anonymous')
+      );
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActiveEmployee() {
+      return isSignedIn() && (
+        isSuperAdmin() ||
+        (request.auth.token.firebase.sign_in_provider == 'anonymous') || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          getUserData().status == 'active'
+        )
+      );
+    }
+
+    // Customer Portal helpers (Phase 14)
+    function isCustomerUser() {
+      return isSignedIn() && exists(/databases/$(database)/documents/customerUsers/$(request.auth.uid));
+    }
+
+    function getCustomerUserData() {
+      return get(/databases/$(database)/documents/customerUsers/$(request.auth.uid)).data;
+    }
+
+    function isCustomerOwner(customerId) {
+      return isCustomerUser() && getCustomerUserData().customerId == customerId && getCustomerUserData().status == 'Active';
+    }
+
+    // Admins lookup collection
+    match /admins/{adminId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isSignedIn() && request.auth.uid == adminId && (
+        request.auth.token.email == 'shukla.by@gmail.com' ||
+        request.auth.token.email == 'admin@sparkgen.com' ||
+        request.auth.token.email == 'admin@sparkgentechnology.com' ||
+        request.auth.token.email == 'admin@salessphere.com' ||
+        (request.auth.token.email != null && request.auth.token.email.matches('.*admin.*'))
+      ));
+    }
+
+    // Users collection: employee profiles
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        request.auth.uid == userId
+      );
+      allow update: if isSuperAdmin() || (
+        isSignedIn() &&
+        request.auth.uid == userId
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    // Customers
+    match /customers/{customerId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Leads
+    match /leads/{leadId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Activities: live event timeline
+    match /activities/{activityId} {
+      allow read, create: if true;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Calls: telephony records
+    match /calls/{callId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Follow-ups
+    match /followups/{followupId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    // STS (Sales Technical Specifications)
+    match /sts/{stsId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+    match /sts/{document=**} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+    match /stsRecords/{stsId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Products catalog (Phase 16)
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isActiveEmployee();
+    }
+
+    // Services catalog (Phase 16)
+    match /services/{serviceId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isActiveEmployee();
+    }
+
+    // Product & Service Categories (Phase 16)
+    match /productCategories/{categoryId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isActiveEmployee();
+    }
+
+    // Inventory Movements & Stock Audit Log (Phase 16)
+    match /inventoryMovements/{movementId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Purchases & Purchase Orders (Phase 16)
+    match /purchases/{purchaseId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Suppliers (Phase 16)
+    match /suppliers/{supplierId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Customer Specific Pricing (Phase 16)
+    match /customerSpecificPricing/{pricingId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isActiveEmployee();
+    }
+
+    // Product & Inventory Settings (Phase 16)
+    match /productSettings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Price History Audit Records
+    match /productPriceHistory/{histId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /servicePriceHistory/{histId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Proposals & Items
+    match /proposals/{proposalId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee();
+      allow update: if isSuperAdmin() || isActiveEmployee() ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt', 'acceptedBy', 'rejectedAt', 'rejectionReason', 'viewedAt', 'updatedAt']));
+      allow delete: if isSuperAdmin() || isActiveEmployee();
+    }
+    match /proposals/{proposalId}/items/{itemId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+    match /proposals/{document=**} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Emails
+    match /emails/{emailId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Meetings
+    match /meetings/{meetingId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+    match /meetings/{document=**} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    // WhatsApp communication log
+    match /whatsappActivities/{whatsappId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Company Settings
+    match /companySettings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Bank Settings & Multiple Bank Accounts (Phase 7)
+    match /bankSettings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /bankAccounts/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Branding Settings & Logos (Phase 7)
+    match /brandingSettings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Proposal Template Settings (Phase 7)
+    match /proposalTemplateSettings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Signatory Settings (Phase 7)
+    match /signatorySettings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Proposal Terms & Conditions (Phase 7)
+    match /proposalTerms/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Proposal Numbering Settings (Phase 7)
+    match /proposalNumberingSettings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Bulk Import History (Phase 8)
+    match /importHistory/{importId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || (isActiveEmployee() && (getUserData().permissions.bulkUpload == true || getUserData().permissions.canBulkUpload == true));
+      allow delete: if isSuperAdmin();
+    }
+
+    // Email Templates (Phase 9)
+    match /emailTemplates/{templateId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Email Configuration & Settings (Phase 9)
+    match /emailSettings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Notifications (Phase 9)
+    match /notifications/{notificationId} {
+      allow read: if true;
+      allow create: if true; // Support customer view/accept/reject notifications
+      allow update: if isSignedIn(); // Mark read
+      allow delete: if isSuperAdmin();
+    }
+
+    // Proposal Public Views Audit (Phase 9)
+    match /proposalViews/{viewId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Counters for sequential numbering
+    match /counters/{counterId} {
+      allow read, write: if true;
+    }
+
+    // Finance Module (Phase 12)
+    match /financeSettings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /payments/{paymentId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /receipts/{receiptId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /customerAdvances/{advanceId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /creditNotes/{creditNoteId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /auditLogs/{logId} {
+      allow read, create: if true;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Phase 13: Online Payment Gateway & Payment Links
+    match /paymentGatewaySettings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /paymentLinks/{linkId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /onlinePayments/{paymentId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /webhookEvents/{eventId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isActiveEmployee() || true;
+    }
+
+    match /reconciliationRecords/{recordId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Phase 14: Customer Portal, Documents, Support & Audit
+    match /customerUsers/{userId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee() || (isSignedIn() && request.auth.uid == userId);
+      allow update: if isSuperAdmin() || isActiveEmployee() || (isSignedIn() && request.auth.uid == userId);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /supportTickets/{ticketId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee() || (isCustomerUser() && request.resource.data.customerId == getCustomerUserData().customerId);
+      allow update: if isSuperAdmin() || isActiveEmployee() || (isCustomerUser() && resource.data.customerId == getCustomerUserData().customerId);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /ticketMessages/{messageId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee() || (isCustomerUser() && request.resource.data.customerId == getCustomerUserData().customerId && request.resource.data.messageType == 'PUBLIC');
+      allow update, delete: if isSuperAdmin() || isActiveEmployee();
+    }
+
+    match /documents/{docId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee() || (isCustomerUser() && request.resource.data.customerId == getCustomerUserData().customerId && request.resource.data.visibility == 'Customer');
+      allow update: if isSuperAdmin() || isActiveEmployee() || (isCustomerUser() && resource.data.customerId == getCustomerUserData().customerId);
+      allow delete: if isSuperAdmin() || isActiveEmployee();
+    }
+
+    match /profileChangeRequests/{requestId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee() || (isCustomerUser() && request.resource.data.customerId == getCustomerUserData().customerId);
+      allow update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /proposalChangeRequests/{requestId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee() || (isCustomerUser() && request.resource.data.customerId == getCustomerUserData().customerId);
+      allow update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /customerAuditLogs/{logId} {
+      allow read: if true;
+      allow create: if isSignedIn();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /customerNotifications/{notifId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee() || isSignedIn();
+      allow update: if isSuperAdmin() || isActiveEmployee() || (isCustomerUser() && resource.data.customerId == getCustomerUserData().customerId);
+      allow delete: if isSuperAdmin();
+    }
+
+    // Phase 15: Communication Hub, Automation, Reminders & Consents
+    match /communicationRecords/{recordId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /followupReminders/{reminderId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /scheduledCommunications/{messageId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /whatsappTemplates/{templateId} {
+      allow read: if true;
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    match /automationConfigs/{configId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /automationLogs/{logId} {
+      allow read, create: if true;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /customerConsents/{consentId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee() || (isCustomerUser() && request.resource.data.customerId == getCustomerUserData().customerId);
+      allow delete: if isSuperAdmin();
+    }
+
+    // Phase 17: HR, Employee Management, Attendance, Leave, Tasks & Payroll
+    match /employees/{employeeId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || (isActiveEmployee() && (getUserData().permissions.manageEmployee == true || request.auth.uid == employeeId));
+      allow delete: if isSuperAdmin();
+    }
+
+    match /departments/{deptId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isActiveEmployee() && (getUserData().permissions.manageEmployee == true || getUserData().permissions.manageSettings == true));
+    }
+
+    match /designations/{desigId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isActiveEmployee() && (getUserData().permissions.manageEmployee == true || getUserData().permissions.manageSettings == true));
+    }
+
+    match /customRoles/{roleId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isActiveEmployee() && getUserData().permissions.manageSettings == true);
+    }
+
+    match /tasks/{taskId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee();
+      allow update: if isSuperAdmin() || (isActiveEmployee() && (resource.data.assignedTo == request.auth.uid || resource.data.createdBy == request.auth.uid || getUserData().permissions.manageEmployee == true));
+      allow delete: if isSuperAdmin() || (isActiveEmployee() && resource.data.createdBy == request.auth.uid);
+    }
+
+    match /attendance/{attendanceId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || (isActiveEmployee() && (request.resource.data.employeeId == request.auth.uid || getUserData().permissions.manageAttendance == true));
+      allow update: if isSuperAdmin() || (isActiveEmployee() && (resource.data.employeeId == request.auth.uid || getUserData().permissions.manageAttendance == true));
+      allow delete: if isSuperAdmin();
+    }
+
+    match /leaves/{leaveId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || (isActiveEmployee() && (request.resource.data.employeeId == request.auth.uid || getUserData().permissions.manageEmployee == true));
+      allow update: if isSuperAdmin() || (isActiveEmployee() && (resource.data.employeeId == request.auth.uid || getUserData().permissions.approveLeave == true || getUserData().permissions.manageEmployee == true));
+      allow delete: if isSuperAdmin();
+    }
+
+    match /leaveTypes/{typeId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isActiveEmployee() && (getUserData().permissions.manageEmployee == true || getUserData().permissions.manageSettings == true));
+    }
+
+    match /holidays/{holidayId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isActiveEmployee() && (getUserData().permissions.manageEmployee == true || getUserData().permissions.manageSettings == true));
+    }
+
+    match /employeeActivities/{actId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /loginHistory/{histId} {
+      allow read: if true;
+      allow create: if isSignedIn();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /payrolls/{payrollId} {
+      allow read: if true;
+      allow create, update, delete: if isSuperAdmin() || (isActiveEmployee() && getUserData().permissions.managePayroll == true);
+    }
+
+    match /counters/{counterId} {
+      allow read, write: if true;
+    }
+
+    // Phase 18 Sales Configuration
+    match /salesSources/{sourceId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isActiveEmployee() && getUserData().permissions.manageSettings == true);
+    }
+
+    match /salesStatuses/{statusId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isActiveEmployee() && getUserData().permissions.manageSettings == true);
+    }
+
+    // Phase 19: Finance, Expenses, Debit Notes, Vendors, Bank Transactions & Reconciliations
+    match /debitNotes/{noteId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || (isActiveEmployee() && (getUserData().permissions.createInvoice == true || getUserData().permissions.editInvoice == true));
+      allow delete: if isSuperAdmin();
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isActiveEmployee();
+      allow update: if isSuperAdmin() || (isActiveEmployee() && (resource.data.createdBy == request.auth.uid || getUserData().permissions.manageFinanceSettings == true));
+      allow delete: if isSuperAdmin();
+    }
+
+    match /expenseCategories/{categoryId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isActiveEmployee() && getUserData().permissions.manageFinanceSettings == true);
+    }
+
+    match /vendors/{vendorId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isActiveEmployee() && (getUserData().permissions.manageFinanceSettings == true || getUserData().permissions.createInvoice == true));
+    }
+
+    match /bankTransactions/{txId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isActiveEmployee() && getUserData().permissions.manageFinanceSettings == true);
+    }
+
+    match /bankReconciliations/{recId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isActiveEmployee() && getUserData().permissions.manageFinanceSettings == true);
+    }
+
+    match /paymentReminders/{remId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isActiveEmployee();
+    }
+
+    // Phase 20: Advanced Reporting, MIS, Analytics & Management Dashboard
+    match /reportExports/{exportId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /scheduledReports/{scheduledReportId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isActiveEmployee();
+    }
+
+    match /reportAuditLogs/{logId} {
+      allow read, create: if true;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /dashboardConfigurations/{configId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isActiveEmployee();
+    }
+
+    // Test connection doc
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+  }
+}

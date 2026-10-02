@@ -1,0 +1,6 @@
+{
+  "name": "SalesSphere CRM & Proposal ERP",
+  "description": "Enterprise Real-Time Sales CRM, Lead Management, Calling, and Proposal ERP with PDF Generation and Role-Based Access Control",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

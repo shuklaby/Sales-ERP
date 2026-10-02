@@ -1,0 +1,1399 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System user with role and permissions",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "employee"] },
+        "name": { "type": "string", "maxLength": 100 },
+        "mobile": { "type": "string", "maxLength": 20 },
+        "department": { "type": "string", "maxLength": 100 },
+        "designation": { "type": "string", "maxLength": 100 },
+        "employeeId": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "permissions": { "type": "object" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["uid", "email", "role", "name", "status"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Customer entity for sales lifecycle",
+      "type": "object",
+      "properties": {
+        "customerId": { "type": "string" },
+        "companyName": { "type": "string", "maxLength": 200 },
+        "contactPerson": { "type": "string", "maxLength": 100 },
+        "mobile": { "type": "string", "maxLength": 20 },
+        "alternateNumber": { "type": "string", "maxLength": 20 },
+        "email": { "type": "string", "format": "email" },
+        "gstNumber": { "type": "string", "maxLength": 20 },
+        "address": { "type": "string", "maxLength": 500 },
+        "city": { "type": "string", "maxLength": 100 },
+        "state": { "type": "string", "maxLength": 100 },
+        "pincode": { "type": "string", "maxLength": 10 },
+        "leadSource": { "type": "string", "maxLength": 100 },
+        "assignedEmployeeId": { "type": "string" },
+        "assignedEmployeeName": { "type": "string" },
+        "status": { "type": "string", "enum": ["New", "Contacted", "Interested", "Meeting", "Proposal Sent", "Negotiation", "Won", "Lost", "Follow-up"] },
+        "nextFollowUp": { "type": "string" },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["companyName", "contactPerson", "mobile", "status"]
+    },
+    "Lead": {
+      "title": "Lead",
+      "description": "Lead entity before conversion",
+      "type": "object",
+      "properties": {
+        "leadId": { "type": "string" },
+        "companyName": { "type": "string", "maxLength": 200 },
+        "contactPerson": { "type": "string", "maxLength": 100 },
+        "mobile": { "type": "string", "maxLength": 20 },
+        "alternateNumber": { "type": "string", "maxLength": 20 },
+        "email": { "type": "string", "format": "email" },
+        "gstNumber": { "type": "string", "maxLength": 20 },
+        "address": { "type": "string", "maxLength": 500 },
+        "city": { "type": "string", "maxLength": 100 },
+        "state": { "type": "string", "maxLength": 100 },
+        "pincode": { "type": "string", "maxLength": 10 },
+        "leadSource": { "type": "string", "maxLength": 100 },
+        "assignedEmployeeId": { "type": "string" },
+        "assignedEmployeeName": { "type": "string" },
+        "status": { "type": "string" },
+        "nextFollowUp": { "type": "string" },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "isConverted": { "type": "boolean" },
+        "convertedCustomerId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["companyName", "contactPerson", "mobile", "status"]
+    },
+    "Activity": {
+      "title": "Activity",
+      "description": "Activity log entry for audit and real-time feed",
+      "type": "object",
+      "properties": {
+        "activityId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "leadId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userRole": { "type": "string" },
+        "type": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["userId", "type", "description"]
+    },
+    "Call": {
+      "title": "Call",
+      "description": "Call record created after initiating phone action",
+      "type": "object",
+      "properties": {
+        "callId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "leadId": { "type": "string" },
+        "companyName": { "type": "string" },
+        "contactPerson": { "type": "string" },
+        "mobile": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "dateTime": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "followUpDate": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["mobile", "employeeId", "status"]
+    },
+    "FollowUp": {
+      "title": "FollowUp",
+      "description": "Scheduled customer or lead follow-up task",
+      "type": "object",
+      "properties": {
+        "followupId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "leadId": { "type": "string" },
+        "companyName": { "type": "string" },
+        "contactPerson": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "reason": { "type": "string" },
+        "notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["Upcoming", "Due Today", "Completed", "Overdue", "Cancelled"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["date", "employeeId", "status", "reason"]
+    },
+    "STS": {
+      "title": "STS",
+      "description": "Sales Technical Specification / Requirement record",
+      "type": "object",
+      "properties": {
+        "stsNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "leadId": { "type": "string" },
+        "companyName": { "type": "string" },
+        "contactPerson": { "type": "string" },
+        "assignedEmployeeId": { "type": "string" },
+        "assignedEmployeeName": { "type": "string" },
+        "date": { "type": "string" },
+        "requirement": { "type": "string" },
+        "status": { "type": "string" },
+        "amount": { "type": "number" },
+        "followUpDate": { "type": "string" },
+        "remarks": { "type": "string" },
+        "attachments": { "type": "array" },
+        "createdBy": { "type": "string" },
+        "createdByName": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["stsNumber", "requirement", "status"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Catalog product with dynamic pricing",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "name": { "type": "string" },
+        "productCode": { "type": "string" },
+        "description": { "type": "string" },
+        "unit": { "type": "string" },
+        "price": { "type": "number" },
+        "gstRate": { "type": "number" },
+        "discountAvailable": { "type": "boolean" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "price", "gstRate", "active"]
+    },
+    "Service": {
+      "title": "Service",
+      "description": "Catalog service item",
+      "type": "object",
+      "properties": {
+        "serviceId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "gstRate": { "type": "number" },
+        "duration": { "type": "string" },
+        "terms": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "price", "gstRate", "active"]
+    },
+    "Proposal": {
+      "title": "Proposal",
+      "description": "Commercial proposal with line items, snapshots, and PDF details",
+      "type": "object",
+      "properties": {
+        "proposalNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerEmail": { "type": "string" },
+        "customerMobile": { "type": "string" },
+        "customerGst": { "type": "string" },
+        "customerAddress": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdByName": { "type": "string" },
+        "status": { "type": "string", "enum": ["Draft", "Sent", "Viewed", "Under Discussion", "Accepted", "Rejected", "Expired"] },
+        "items": { "type": "array" },
+        "subtotal": { "type": "number" },
+        "discount": { "type": "number" },
+        "taxableAmount": { "type": "number" },
+        "gstTotal": { "type": "number" },
+        "grandTotal": { "type": "number" },
+        "validUntil": { "type": "string" },
+        "terms": { "type": "string" },
+        "companySnapshot": { "type": "object" },
+        "bankSnapshot": { "type": "object" },
+        "pdfDataUrl": { "type": "string" },
+        "sentAt": { "type": "string" },
+        "viewedAt": { "type": "string" },
+        "acceptedAt": { "type": "string" },
+        "rejectedAt": { "type": "string" },
+        "rejectionReason": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["proposalNumber", "customerId", "customerName", "status", "grandTotal"]
+    },
+    "CompanySettings": {
+      "title": "CompanySettings",
+      "description": "Master company profile and proposal defaults",
+      "type": "object",
+      "properties": {
+        "companyName": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "address": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "website": { "type": "string" },
+        "gstNumber": { "type": "string" },
+        "pan": { "type": "string" },
+        "termsAndConditions": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["companyName", "address", "phone", "email"]
+    },
+    "BankSettings": {
+      "title": "BankSettings",
+      "description": "Master banking and payment details for invoices/proposals",
+      "type": "object",
+      "properties": {
+        "accountHolderName": { "type": "string" },
+        "bankName": { "type": "string" },
+        "accountNumber": { "type": "string" },
+        "ifscCode": { "type": "string" },
+        "branch": { "type": "string" },
+        "upiId": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["accountHolderName", "bankName", "accountNumber", "ifscCode"]
+    },
+    "PriceHistory": {
+      "title": "PriceHistory",
+      "description": "Audit record of product or service price and GST updates",
+      "type": "object",
+      "properties": {
+        "itemType": { "type": "string" },
+        "itemId": { "type": "string" },
+        "itemCode": { "type": "string" },
+        "itemName": { "type": "string" },
+        "oldPrice": { "type": "number" },
+        "newPrice": { "type": "number" },
+        "oldGstRate": { "type": "number" },
+        "newGstRate": { "type": "number" },
+        "changedBy": { "type": "string" },
+        "changedByUid": { "type": "string" },
+        "changedAt": { "type": "string" },
+        "reason": { "type": "string" }
+      },
+      "required": ["itemType", "itemId", "oldPrice", "newPrice", "changedBy", "changedAt"]
+    },
+    "EmailActivity": {
+      "title": "EmailActivity",
+      "description": "Email dispatch record",
+      "type": "object",
+      "properties": {
+        "emailId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "proposalId": { "type": "string" },
+        "recipient": { "type": "string" },
+        "sender": { "type": "string" },
+        "subject": { "type": "string" },
+        "message": { "type": "string" },
+        "status": { "type": "string" },
+        "sentAt": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" }
+      },
+      "required": ["recipient", "subject", "status"]
+    },
+    "WhatsAppActivity": {
+      "title": "WhatsAppActivity",
+      "description": "WhatsApp communication log",
+      "type": "object",
+      "properties": {
+        "whatsappId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "leadId": { "type": "string" },
+        "mobile": { "type": "string" },
+        "message": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" }
+      },
+      "required": ["mobile", "timestamp", "employeeId"]
+    },
+    "EmailTemplate": {
+      "title": "EmailTemplate",
+      "description": "Customizable commercial email template",
+      "type": "object",
+      "properties": {
+        "templateId": { "type": "string" },
+        "templateName": { "type": "string" },
+        "type": { "type": "string" },
+        "subject": { "type": "string" },
+        "body": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["templateName", "subject", "body"]
+    },
+    "EmailSettings": {
+      "title": "EmailSettings",
+      "description": "Provider configuration metadata",
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderEmail": { "type": "string" },
+        "replyTo": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["provider", "senderName", "senderEmail"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Real-time notification alert",
+      "type": "object",
+      "properties": {
+        "notificationId": { "type": "string" },
+        "userId": { "type": "string" },
+        "type": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "type", "title", "message"]
+    },
+    "ProposalView": {
+      "title": "ProposalView",
+      "description": "Customer view and engagement audit event",
+      "type": "object",
+      "properties": {
+        "proposalId": { "type": "string" },
+        "proposalNumber": { "type": "string" },
+        "viewerToken": { "type": "string" },
+        "eventType": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["proposalId", "viewerToken", "eventType"]
+    },
+    "ImportHistory": {
+      "title": "ImportHistory",
+      "description": "Batch spreadsheet upload audit record",
+      "type": "object",
+      "properties": {
+        "fileName": { "type": "string" },
+        "recordType": { "type": "string" },
+        "totalRows": { "type": "number" },
+        "importedCount": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["fileName", "recordType", "status"]
+    },
+    "PaymentLink": {
+      "title": "PaymentLink",
+      "description": "Secure payment link generated for customer invoice payment",
+      "type": "object",
+      "properties": {
+        "paymentLinkId": { "type": "string" },
+        "invoiceId": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "gateway": { "type": "string" },
+        "gatewayOrderId": { "type": "string" },
+        "gatewayPaymentId": { "type": "string" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string" },
+        "status": { "type": "string" },
+        "token": { "type": "string" },
+        "paymentUrl": { "type": "string" },
+        "expiresAt": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["paymentLinkId", "invoiceId", "amount", "token", "status"]
+    },
+    "OnlinePayment": {
+      "title": "OnlinePayment",
+      "description": "Verified online payment transaction record",
+      "type": "object",
+      "properties": {
+        "paymentId": { "type": "string" },
+        "invoiceId": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string" },
+        "gateway": { "type": "string" },
+        "gatewayOrderId": { "type": "string" },
+        "gatewayPaymentId": { "type": "string" },
+        "status": { "type": "string" },
+        "verifiedServerSide": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["paymentId", "invoiceId", "amount", "gateway", "status"]
+    },
+    "PaymentGatewaySettings": {
+      "title": "PaymentGatewaySettings",
+      "description": "Payment gateway public configuration metadata",
+      "type": "object",
+      "properties": {
+        "gateway": { "type": "string" },
+        "environment": { "type": "string" },
+        "merchantName": { "type": "string" },
+        "currency": { "type": "string" },
+        "status": { "type": "string" },
+        "publicKey": { "type": "string" }
+      },
+      "required": ["gateway", "environment", "merchantName", "currency"]
+    },
+    "WebhookEvent": {
+      "title": "WebhookEvent",
+      "description": "Gateway webhook idempotency event log",
+      "type": "object",
+      "properties": {
+        "webhookEventId": { "type": "string" },
+        "gateway": { "type": "string" },
+        "eventType": { "type": "string" },
+        "receivedAt": { "type": "string" },
+        "processedAt": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["webhookEventId", "gateway", "eventType", "status"]
+    },
+    "ReconciliationRecord": {
+      "title": "ReconciliationRecord",
+      "description": "Gateway vs internal ledger reconciliation",
+      "type": "object",
+      "properties": {
+        "gatewayOrder": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "expectedAmount": { "type": "number" },
+        "gatewayPaymentAmount": { "type": "number" },
+        "internalPaymentAmount": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["gatewayOrder", "invoiceNumber", "status"]
+    },
+    "CustomerUser": {
+      "title": "CustomerUser",
+      "description": "Customer organization authorized user profile and RBAC permissions",
+      "type": "object",
+      "properties": {
+        "customerUserId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "organizationId": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["Customer Admin", "Customer User"] },
+        "status": { "type": "string", "enum": ["Invited", "Active", "Suspended", "Disabled"] }
+      },
+      "required": ["customerUserId", "customerId", "name", "email", "role", "status"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Customer support and inquiry ticket",
+      "type": "object",
+      "properties": {
+        "ticketId": { "type": "string" },
+        "ticketNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerUserId": { "type": "string" },
+        "subject": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "priority": { "type": "string", "enum": ["Low", "Medium", "High", "Urgent"] },
+        "status": { "type": "string", "enum": ["Open", "In Progress", "Waiting for Customer", "Resolved", "Closed"] }
+      },
+      "required": ["ticketId", "ticketNumber", "customerId", "subject", "category", "priority", "status"]
+    },
+    "TicketMessage": {
+      "title": "TicketMessage",
+      "description": "Threaded message on support ticket with public vs internal visibility",
+      "type": "object",
+      "properties": {
+        "messageId": { "type": "string" },
+        "ticketId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderType": { "type": "string", "enum": ["Customer", "Employee", "Admin"] },
+        "message": { "type": "string" },
+        "messageType": { "type": "string", "enum": ["PUBLIC", "INTERNAL"] }
+      },
+      "required": ["messageId", "ticketId", "customerId", "senderId", "senderType", "message", "messageType"]
+    },
+    "CustomerDocument": {
+      "title": "CustomerDocument",
+      "description": "Customer file storage metadata and visibility controls",
+      "type": "object",
+      "properties": {
+        "documentId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "fileUrl": { "type": "string" },
+        "uploadedBy": { "type": "string" },
+        "visibility": { "type": "string", "enum": ["Customer", "Internal"] },
+        "status": { "type": "string" }
+      },
+      "required": ["documentId", "customerId", "name", "fileUrl", "visibility", "status"]
+    },
+    "ProfileChangeRequest": {
+      "title": "ProfileChangeRequest",
+      "description": "Customer requested change to master company profile awaiting Admin review",
+      "type": "object",
+      "properties": {
+        "requestId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerUserId": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] }
+      },
+      "required": ["requestId", "customerId", "status"]
+    },
+    "ProposalChangeRequest": {
+      "title": "ProposalChangeRequest",
+      "description": "Customer request for changes on a commercial proposal",
+      "type": "object",
+      "properties": {
+        "requestId": { "type": "string" },
+        "proposalId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "status": { "type": "string", "enum": ["Open", "In Review", "Resolved", "Cancelled"] }
+      },
+      "required": ["requestId", "proposalId", "customerId", "status"]
+    },
+    "CustomerAuditLog": {
+      "title": "CustomerAuditLog",
+      "description": "Audit trail of customer actions inside portal",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerUserId": { "type": "string" },
+        "action": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["logId", "customerId", "action", "timestamp"]
+    },
+    "CustomerNotification": {
+      "title": "CustomerNotification",
+      "description": "Customer portal in-app notification",
+      "type": "object",
+      "properties": {
+        "notificationId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "read": { "type": "boolean" }
+      },
+      "required": ["notificationId", "customerId", "title", "message", "read"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "Complete corporate employee profile and business records",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string" },
+        "employeeCode": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "designation": { "type": "string" },
+        "department": { "type": "string" },
+        "roleId": { "type": "string" },
+        "employmentStatus": { "type": "string", "enum": ["Active", "Probation", "On Leave", "Suspended", "Inactive", "Exited"] },
+        "hasLoginAccess": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["employeeId", "employeeCode", "firstName", "lastName", "email", "employmentStatus"]
+    },
+    "Department": {
+      "title": "Department",
+      "description": "Organizational department structure",
+      "type": "object",
+      "properties": {
+        "departmentId": { "type": "string" },
+        "name": { "type": "string" },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["departmentId", "name", "status"]
+    },
+    "Designation": {
+      "title": "Designation",
+      "description": "Job designations mapped to departments",
+      "type": "object",
+      "properties": {
+        "designationId": { "type": "string" },
+        "name": { "type": "string" },
+        "departmentId": { "type": "string" },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["designationId", "name", "departmentId", "status"]
+    },
+    "CustomRole": {
+      "title": "CustomRole",
+      "description": "Role-based access control and data scopes",
+      "type": "object",
+      "properties": {
+        "roleId": { "type": "string" },
+        "name": { "type": "string" },
+        "dataScope": { "type": "string", "enum": ["Own Records", "Team Records", "Department Records", "All Records"] },
+        "permissions": { "type": "object" },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["roleId", "name", "dataScope", "permissions", "status"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "Employee task and deadline assignment",
+      "type": "object",
+      "properties": {
+        "taskId": { "type": "string" },
+        "taskNumber": { "type": "string" },
+        "title": { "type": "string" },
+        "assignedTo": { "type": "string" },
+        "priority": { "type": "string", "enum": ["Low", "Medium", "High", "Urgent"] },
+        "dueDate": { "type": "string" },
+        "status": { "type": "string", "enum": ["Todo", "In Progress", "Waiting", "Completed", "Cancelled"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["taskId", "taskNumber", "title", "assignedTo", "priority", "dueDate", "status"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Employee attendance check-ins and verified time tracking",
+      "type": "object",
+      "properties": {
+        "attendanceId": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "date": { "type": "string" },
+        "checkIn": { "type": "string" },
+        "status": { "type": "string", "enum": ["Present", "Late", "Half Day", "Absent", "Leave", "Holiday"] },
+        "source": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["attendanceId", "employeeId", "date", "checkIn", "status"]
+    },
+    "Leave": {
+      "title": "Leave",
+      "description": "Employee leave requests and approvals",
+      "type": "object",
+      "properties": {
+        "leaveId": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "leaveType": { "type": "string" },
+        "fromDate": { "type": "string" },
+        "toDate": { "type": "string" },
+        "numberOfDays": { "type": "number" },
+        "reason": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected", "Cancelled"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["leaveId", "employeeId", "leaveType", "fromDate", "toDate", "numberOfDays", "status"]
+    },
+    "LeaveType": {
+      "title": "LeaveType",
+      "description": "Company leave category and annual quota configuration",
+      "type": "object",
+      "properties": {
+        "leaveTypeId": { "type": "string" },
+        "name": { "type": "string" },
+        "annualLimit": { "type": "number" },
+        "carryForward": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["leaveTypeId", "name", "annualLimit", "status"]
+    },
+    "Holiday": {
+      "title": "Holiday",
+      "description": "Company holiday calendar date",
+      "type": "object",
+      "properties": {
+        "holidayId": { "type": "string" },
+        "name": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] },
+        "year": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["holidayId", "name", "date", "status", "year"]
+    },
+    "EmployeeActivity": {
+      "title": "EmployeeActivity",
+      "description": "Factual business action tracking for audit",
+      "type": "object",
+      "properties": {
+        "activityId": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "action": { "type": "string" },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["activityId", "employeeId", "action", "timestamp"]
+    },
+    "LoginHistory": {
+      "title": "LoginHistory",
+      "description": "Employee login sessions and authentication events",
+      "type": "object",
+      "properties": {
+        "historyId": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "loginTime": { "type": "string" },
+        "sessionStatus": { "type": "string", "enum": ["Active", "Closed", "Expired"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["historyId", "employeeId", "loginTime", "sessionStatus"]
+    },
+    "Payroll": {
+      "title": "Payroll",
+      "description": "Employee monthly calculated compensation and salary slips",
+      "type": "object",
+      "properties": {
+        "payrollId": { "type": "string" },
+        "monthYear": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "basicSalary": { "type": "number" },
+        "grossSalary": { "type": "number" },
+        "netSalary": { "type": "number" },
+        "status": { "type": "string", "enum": ["Draft", "Approved", "Paid"] },
+        "generatedAt": { "type": "string" }
+      },
+      "required": ["payrollId", "monthYear", "employeeId", "netSalary", "status"]
+    },
+    "Meeting": {
+      "title": "Meeting",
+      "description": "Sales appointment or client meeting",
+      "type": "object",
+      "properties": {
+        "meetingId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "leadId": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "title": { "type": "string" },
+        "meetingType": { "type": "string", "enum": ["Online", "Offline", "Phone"] },
+        "scheduledAt": { "type": "string" },
+        "duration": { "type": "number" },
+        "meetingLink": { "type": "string" },
+        "notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["Scheduled", "Completed", "Cancelled", "Rescheduled"] }
+      },
+      "required": ["meetingId", "title", "employeeId", "scheduledAt", "status"]
+    },
+    "LeadSource": {
+      "title": "LeadSource",
+      "description": "Configurable marketing lead channel source",
+      "type": "object",
+      "properties": {
+        "sourceId": { "type": "string" },
+        "name": { "type": "string" },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] }
+      },
+      "required": ["sourceId", "name", "status"]
+    },
+    "LeadStatusItem": {
+      "title": "LeadStatusItem",
+      "description": "Configurable pipeline stage status",
+      "type": "object",
+      "properties": {
+        "statusId": { "type": "string" },
+        "name": { "type": "string" },
+        "color": { "type": "string" },
+        "order": { "type": "number" },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] }
+      },
+      "required": ["statusId", "name", "order", "status"]
+    },
+    "STSStatusHistory": {
+      "title": "STSStatusHistory",
+      "description": "Audit record of STS state transitions",
+      "type": "object",
+      "properties": {
+        "historyId": { "type": "string" },
+        "stsId": { "type": "string" },
+        "oldStatus": { "type": "string" },
+        "newStatus": { "type": "string" },
+        "changedBy": { "type": "string" },
+        "changedAt": { "type": "string" },
+        "reason": { "type": "string" }
+      },
+      "required": ["historyId", "stsId", "oldStatus", "newStatus", "changedBy", "changedAt"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "Commercial tax invoice with itemization and GST breakdown",
+      "type": "object",
+      "properties": {
+        "invoiceNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "invoiceDate": { "type": "string" },
+        "dueDate": { "type": "string" },
+        "subtotal": { "type": "number" },
+        "tax": { "type": "number" },
+        "grandTotal": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "outstandingAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["Draft", "Sent", "Partially Paid", "Paid", "Overdue", "Cancelled"] }
+      },
+      "required": ["invoiceNumber", "customerId", "grandTotal", "status"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Financial payment transaction recorded against an invoice",
+      "type": "object",
+      "properties": {
+        "paymentId": { "type": "string" },
+        "invoiceId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "amount": { "type": "number" },
+        "paymentDate": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "transactionReference": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pending", "Confirmed", "Failed", "Cancelled", "Refunded"] }
+      },
+      "required": ["paymentId", "amount", "paymentDate", "paymentMethod", "status"]
+    },
+    "PaymentReceipt": {
+      "title": "PaymentReceipt",
+      "description": "Official signed payment acknowledgement receipt",
+      "type": "object",
+      "properties": {
+        "receiptNumber": { "type": "string" },
+        "paymentId": { "type": "string" },
+        "invoiceId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "amount": { "type": "number" },
+        "paymentDate": { "type": "string" },
+        "paymentMethod": { "type": "string" }
+      },
+      "required": ["receiptNumber", "paymentId", "amount", "paymentDate"]
+    },
+    "CreditNote": {
+      "title": "CreditNote",
+      "description": "Commercial credit note reducing accounts receivable",
+      "type": "object",
+      "properties": {
+        "creditNoteNumber": { "type": "string" },
+        "invoiceId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "amount": { "type": "number" },
+        "reason": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string", "enum": ["Issued", "Applied", "Cancelled"] }
+      },
+      "required": ["creditNoteNumber", "invoiceId", "customerId", "amount", "status"]
+    },
+    "DebitNote": {
+      "title": "DebitNote",
+      "description": "Commercial debit note recorded against invoices or customers",
+      "type": "object",
+      "properties": {
+        "debitNoteNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "amount": { "type": "number" },
+        "tax": { "type": "number" },
+        "total": { "type": "number" },
+        "reason": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string", "enum": ["Draft", "Finalized", "Cancelled"] }
+      },
+      "required": ["debitNoteNumber", "customerId", "total", "status"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Company operational expense entry with approval and bill attachment",
+      "type": "object",
+      "properties": {
+        "expenseId": { "type": "string" },
+        "expenseDate": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "categoryName": { "type": "string" },
+        "amount": { "type": "number" },
+        "tax": { "type": "number" },
+        "total": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["DRAFT", "PENDING_APPROVAL", "APPROVED", "REJECTED", "PAID", "CANCELLED"] }
+      },
+      "required": ["expenseId", "expenseDate", "categoryId", "total", "status"]
+    },
+    "ExpenseCategory": {
+      "title": "ExpenseCategory",
+      "description": "Configurable corporate expense classification category",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["name", "isActive"]
+    },
+    "Vendor": {
+      "title": "Vendor",
+      "description": "External supplier, contractor, or vendor record",
+      "type": "object",
+      "properties": {
+        "vendorId": { "type": "string" },
+        "vendorName": { "type": "string" },
+        "company": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] }
+      },
+      "required": ["vendorId", "vendorName", "status"]
+    },
+    "BankTransaction": {
+      "title": "BankTransaction",
+      "description": "Corporate bank account ledger statement transaction",
+      "type": "object",
+      "properties": {
+        "transactionId": { "type": "string" },
+        "transactionDate": { "type": "string" },
+        "bankAccountId": { "type": "string" },
+        "description": { "type": "string" },
+        "amount": { "type": "number" },
+        "type": { "type": "string" },
+        "reconciliationStatus": { "type": "string", "enum": ["UNRECONCILED", "RECONCILED", "IGNORED"] }
+      },
+      "required": ["transactionId", "transactionDate", "bankAccountId", "amount", "reconciliationStatus"]
+    },
+    "BankReconciliation": {
+      "title": "BankReconciliation",
+      "description": "Bank transaction audit matching with internal ledger invoice or payment",
+      "type": "object",
+      "properties": {
+        "reconciliationId": { "type": "string" },
+        "bankTransactionId": { "type": "string" },
+        "reconciledAmount": { "type": "number" },
+        "difference": { "type": "number" },
+        "status": { "type": "string", "enum": ["RECONCILED", "UNRECONCILED"] }
+      },
+      "required": ["reconciliationId", "bankTransactionId", "status"]
+    },
+    "PaymentReminder": {
+      "title": "PaymentReminder",
+      "description": "Automated payment due and overdue notice scheduler",
+      "type": "object",
+      "properties": {
+        "reminderId": { "type": "string" },
+        "invoiceId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "type": { "type": "string", "enum": ["BEFORE_DUE", "ON_DUE", "OVERDUE"] },
+        "scheduledAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["SCHEDULED", "SENT", "DELIVERED", "FAILED"] }
+      },
+      "required": ["reminderId", "invoiceId", "type", "scheduledAt", "status"]
+    },
+    "ReportExport": {
+      "title": "ReportExport",
+      "description": "Exported report snapshot records for audit and download history",
+      "type": "object",
+      "properties": {
+        "reportId": { "type": "string" },
+        "reportName": { "type": "string" },
+        "format": { "type": "string", "enum": ["excel", "csv", "pdf"] },
+        "generatedBy": { "type": "string" },
+        "generatedByName": { "type": "string" },
+        "generatedAt": { "type": "string" },
+        "rowCount": { "type": "number" },
+        "fileName": { "type": "string" }
+      },
+      "required": ["reportId", "reportName", "format", "generatedBy", "generatedAt", "fileName"]
+    },
+    "ScheduledReport": {
+      "title": "ScheduledReport",
+      "description": "Automated scheduled report distribution configuration",
+      "type": "object",
+      "properties": {
+        "reportId": { "type": "string" },
+        "reportName": { "type": "string" },
+        "frequency": { "type": "string", "enum": ["daily", "weekly", "monthly"] },
+        "time": { "type": "string" },
+        "recipients": { "type": "array", "items": { "type": "string" } },
+        "format": { "type": "string", "enum": ["excel", "csv", "pdf"] },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["reportId", "reportName", "frequency", "time", "recipients", "format", "isActive"]
+    },
+    "ReportAuditLog": {
+      "title": "ReportAuditLog",
+      "description": "Audit log entries for report generations, downloads and modifications",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string" },
+        "reportId": { "type": "string" },
+        "reportName": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userRole": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["action", "reportId", "reportName", "userId", "timestamp"]
+    },
+    "DashboardConfiguration": {
+      "title": "DashboardConfiguration",
+      "description": "User specific executive dashboard layout and widget settings",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "visibleWidgets": { "type": "array", "items": { "type": "string" } },
+        "widgetOrder": { "type": "array", "items": { "type": "string" } },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "visibleWidgets", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/customerUsers/{userId}": {
+      "schema": { "$ref": "#/entities/CustomerUser" },
+      "description": "Customer organization user profiles and portal access control"
+    },
+    "/supportTickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/SupportTicket" },
+      "description": "Customer support and inquiry tickets"
+    },
+    "/ticketMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/TicketMessage" },
+      "description": "Threaded messages on support tickets with internal note separation"
+    },
+    "/documents/{docId}": {
+      "schema": { "$ref": "#/entities/CustomerDocument" },
+      "description": "Shared and internal customer documents"
+    },
+    "/profileChangeRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/ProfileChangeRequest" },
+      "description": "Customer company profile update requests"
+    },
+    "/proposalChangeRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/ProposalChangeRequest" },
+      "description": "Customer change requests for proposals"
+    },
+    "/customerAuditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/CustomerAuditLog" },
+      "description": "Customer portal activity and security audit logs"
+    },
+    "/customerNotifications/{notifId}": {
+      "schema": { "$ref": "#/entities/CustomerNotification" },
+      "description": "Customer portal in-app alerts and notifications"
+    },
+    "/paymentLinks/{linkId}": {
+      "schema": { "$ref": "#/entities/PaymentLink" },
+      "description": "Secure payment links generated for invoice settlement"
+    },
+    "/onlinePayments/{paymentId}": {
+      "schema": { "$ref": "#/entities/OnlinePayment" },
+      "description": "Online payment transactions and verification audits"
+    },
+    "/paymentGatewaySettings/{docId}": {
+      "schema": { "$ref": "#/entities/PaymentGatewaySettings" },
+      "description": "Payment gateway configuration parameters"
+    },
+    "/webhookEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/WebhookEvent" },
+      "description": "Gateway webhook idempotency event logs"
+    },
+    "/reconciliationRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/ReconciliationRecord" },
+      "description": "Gateway to internal ledger payment reconciliation records"
+    },
+    "/emailTemplates/{templateId}": {
+      "schema": { "$ref": "#/entities/EmailTemplate" },
+      "description": "Configurable corporate email dispatch templates"
+    },
+    "/emailSettings/{docId}": {
+      "schema": { "$ref": "#/entities/EmailSettings" },
+      "description": "Email provider credentials status"
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "Real-time user notifications"
+    },
+    "/proposalViews/{viewId}": {
+      "schema": { "$ref": "#/entities/ProposalView" },
+      "description": "Customer view tracking and response audit"
+    },
+    "/importHistory/{importId}": {
+      "schema": { "$ref": "#/entities/ImportHistory" },
+      "description": "Bulk spreadsheet upload diagnostic history"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles, roles, and assigned permissions"
+    },
+    "/admins/{userId}": {
+      "schema": { "type": "object" },
+      "description": "Fast lookup for verified system administrators"
+    },
+    "/customers/{customerId}": {
+      "schema": { "$ref": "#/entities/Customer" },
+      "description": "Active customers"
+    },
+    "/leads/{leadId}": {
+      "schema": { "$ref": "#/entities/Lead" },
+      "description": "Prospective sales leads"
+    },
+    "/activities/{activityId}": {
+      "schema": { "$ref": "#/entities/Activity" },
+      "description": "Real-time timeline and audit events"
+    },
+    "/calls/{callId}": {
+      "schema": { "$ref": "#/entities/Call" },
+      "description": "Call records"
+    },
+    "/followups/{followupId}": {
+      "schema": { "$ref": "#/entities/FollowUp" },
+      "description": "Scheduled sales follow-ups"
+    },
+    "/sts/{stsId}": {
+      "schema": { "$ref": "#/entities/STS" },
+      "description": "Sales Technical Specifications"
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Products catalog"
+    },
+    "/services/{serviceId}": {
+      "schema": { "$ref": "#/entities/Service" },
+      "description": "Services catalog"
+    },
+    "/proposals/{proposalId}": {
+      "schema": { "$ref": "#/entities/Proposal" },
+      "description": "Commercial proposals"
+    },
+    "/emails/{emailId}": {
+      "schema": { "$ref": "#/entities/EmailActivity" },
+      "description": "Sent email records"
+    },
+    "/whatsappActivities/{whatsappId}": {
+      "schema": { "$ref": "#/entities/WhatsAppActivity" },
+      "description": "WhatsApp communication records"
+    },
+    "/companySettings/{docId}": {
+      "schema": { "$ref": "#/entities/CompanySettings" },
+      "description": "Company profile settings"
+    },
+    "/bankSettings/{docId}": {
+      "schema": { "$ref": "#/entities/BankSettings" },
+      "description": "Bank account details"
+    },
+    "/productPriceHistory/{histId}": {
+      "schema": { "$ref": "#/entities/PriceHistory" },
+      "description": "Product price audit history"
+    },
+    "/servicePriceHistory/{histId}": {
+      "schema": { "$ref": "#/entities/PriceHistory" },
+      "description": "Service price audit history"
+    },
+    "/communicationRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/CommunicationRecord" },
+      "description": "Multi-channel corporate communication records (Email, WhatsApp)"
+    },
+    "/followupReminders/{reminderId}": {
+      "schema": { "$ref": "#/entities/FollowupReminder" },
+      "description": "Configurable follow-up and payment reminders"
+    },
+    "/scheduledCommunications/{messageId}": {
+      "schema": { "$ref": "#/entities/ScheduledCommunication" },
+      "description": "Scheduled messages queued for automated server-side dispatch"
+    },
+    "/whatsappTemplates/{templateId}": {
+      "schema": { "$ref": "#/entities/WhatsAppTemplate" },
+      "description": "Approved WhatsApp messaging templates"
+    },
+    "/automationConfigs/{configId}": {
+      "schema": { "$ref": "#/entities/AutomationConfigs" },
+      "description": "System automated communication trigger configurations"
+    },
+    "/automationLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AutomationLog" },
+      "description": "Audit trail for all automated trigger executions"
+    },
+    "/customerConsents/{consentId}": {
+      "schema": { "$ref": "#/entities/CustomerConsent" },
+      "description": "Customer opt-in/opt-out communication preferences"
+    },
+    "/productCategories/{categoryId}": {
+      "schema": { "$ref": "#/entities/ProductCategory" },
+      "description": "Product and service master categories"
+    },
+    "/inventoryMovements/{movementId}": {
+      "schema": { "$ref": "#/entities/InventoryMovement" },
+      "description": "Stock movements, opening stock, adjustments, reservations, and deductions"
+    },
+    "/purchases/{purchaseId}": {
+      "schema": { "$ref": "#/entities/PurchaseRecord" },
+      "description": "Purchase orders and goods receipt entries"
+    },
+    "/suppliers/{supplierId}": {
+      "schema": { "$ref": "#/entities/SupplierRecord" },
+      "description": "Suppliers and vendor management"
+    },
+    "/customerSpecificPricing/{pricingId}": {
+      "schema": { "$ref": "#/entities/CustomerSpecificPrice" },
+      "description": "Customer specific product pricing"
+    },
+    "/productSettings/{docId}": {
+      "schema": { "$ref": "#/entities/ProductSettings" },
+      "description": "Product, inventory, and stock configuration settings"
+    },
+    "/employees/{employeeId}": {
+      "schema": { "$ref": "#/entities/Employee" },
+      "description": "Master employee records"
+    },
+    "/departments/{deptId}": {
+      "schema": { "$ref": "#/entities/Department" },
+      "description": "Departments"
+    },
+    "/designations/{desigId}": {
+      "schema": { "$ref": "#/entities/Designation" },
+      "description": "Designations"
+    },
+    "/customRoles/{roleId}": {
+      "schema": { "$ref": "#/entities/CustomRole" },
+      "description": "Granular roles and permission sets"
+    },
+    "/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/Task" },
+      "description": "Employee task assignments"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": { "$ref": "#/entities/Attendance" },
+      "description": "Employee attendance check-ins and check-outs"
+    },
+    "/leaves/{leaveId}": {
+      "schema": { "$ref": "#/entities/Leave" },
+      "description": "Employee leave requests and approvals"
+    },
+    "/leaveTypes/{typeId}": {
+      "schema": { "$ref": "#/entities/LeaveType" },
+      "description": "Configurable leave types and quotas"
+    },
+    "/holidays/{holidayId}": {
+      "schema": { "$ref": "#/entities/Holiday" },
+      "description": "Company holiday calendar"
+    },
+    "/employeeActivities/{actId}": {
+      "schema": { "$ref": "#/entities/EmployeeActivity" },
+      "description": "Employee business activity audit records"
+    },
+    "/loginHistory/{histId}": {
+      "schema": { "$ref": "#/entities/LoginHistory" },
+      "description": "Employee login and session logs"
+    },
+    "/payrolls/{payrollId}": {
+      "schema": { "$ref": "#/entities/Payroll" },
+      "description": "Payroll records and monthly salary slips"
+    },
+    "/meetings/{meetingId}": {
+      "schema": { "$ref": "#/entities/Meeting" },
+      "description": "Sales and customer appointments"
+    },
+    "/leadSources/{sourceId}": {
+      "schema": { "$ref": "#/entities/LeadSource" },
+      "description": "Configurable lead generation channels"
+    },
+    "/leadStatuses/{statusId}": {
+      "schema": { "$ref": "#/entities/LeadStatusItem" },
+      "description": "Configurable sales pipeline stages"
+    },
+    "/salesSources/{sourceId}": {
+      "schema": { "$ref": "#/entities/LeadSource" },
+      "description": "Configurable sales and lead sources"
+    },
+    "/salesStatuses/{statusId}": {
+      "schema": { "$ref": "#/entities/LeadStatusItem" },
+      "description": "Configurable sales pipeline stages and statuses"
+    },
+    "/stsStatusHistory/{historyId}": {
+      "schema": { "$ref": "#/entities/STSStatusHistory" },
+      "description": "Historical audit logs of STS status transitions"
+    },
+    "/invoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/Invoice" },
+      "description": "Master invoice records"
+    },
+    "/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "Payment records against invoices"
+    },
+    "/receipts/{receiptId}": {
+      "schema": { "$ref": "#/entities/PaymentReceipt" },
+      "description": "Payment receipts generated"
+    },
+    "/creditNotes/{creditNoteId}": {
+      "schema": { "$ref": "#/entities/CreditNote" },
+      "description": "Credit notes for receivable reductions"
+    },
+    "/debitNotes/{debitNoteId}": {
+      "schema": { "$ref": "#/entities/DebitNote" },
+      "description": "Debit notes"
+    },
+    "/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/Expense" },
+      "description": "Corporate expense entries"
+    },
+    "/expenseCategories/{categoryId}": {
+      "schema": { "$ref": "#/entities/ExpenseCategory" },
+      "description": "Expense category classifications"
+    },
+    "/vendors/{vendorId}": {
+      "schema": { "$ref": "#/entities/Vendor" },
+      "description": "Vendor contacts and master accounts"
+    },
+    "/bankTransactions/{txId}": {
+      "schema": { "$ref": "#/entities/BankTransaction" },
+      "description": "Bank account statements and transactions"
+    },
+    "/bankReconciliations/{recId}": {
+      "schema": { "$ref": "#/entities/BankReconciliation" },
+      "description": "Reconciliation records between bank and CRM"
+    },
+    "/paymentReminders/{remId}": {
+      "schema": { "$ref": "#/entities/PaymentReminder" },
+      "description": "Payment due reminders"
+    },
+    "/reportExports/{exportId}": {
+      "schema": { "$ref": "#/entities/ReportExport" },
+      "description": "Historical snapshots of generated reports"
+    },
+    "/scheduledReports/{scheduledReportId}": {
+      "schema": { "$ref": "#/entities/ScheduledReport" },
+      "description": "Automated recurring report schedule configs"
+    },
+    "/reportAuditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/ReportAuditLog" },
+      "description": "Audit trail of report activities"
+    },
+    "/dashboardConfigurations/{configId}": {
+      "schema": { "$ref": "#/entities/DashboardConfiguration" },
+      "description": "Executive dashboard widget customizations"
+    }
+  }
+}
