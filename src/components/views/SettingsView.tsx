@@ -901,18 +901,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
       if (res.ok && data.success) {
         setTestEmailResult({
           success: true,
-          message: `Test email dispatched successfully! (Provider Message ID: ${data.providerMessageId})`,
+          message: 'Email sent successfully.',
         });
       } else {
         setTestEmailResult({
           success: false,
-          message: data.error || 'Failed to dispatch test email.',
+          message: 'Email failed.',
         });
       }
-    } catch (err: any) {
+    } catch {
       setTestEmailResult({
         success: false,
-        message: err.message || 'Network error while dispatching test email',
+        message: 'Email failed.',
       });
     } finally {
       setIsSendingTestEmail(false);

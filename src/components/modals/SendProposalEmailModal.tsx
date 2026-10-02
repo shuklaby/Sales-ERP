@@ -91,9 +91,9 @@ export const SendProposalEmailModal: React.FC<SendProposalEmailModalProps> = ({
       setMessage(interpolateEmailTemplate(proposalTpl.body, variables));
     } else {
       setSelectedTemplateId('');
-      setSubject(`Proposal ${proposal.proposalNumber} from SparkGenTechnology`);
+      setSubject(`Proposal ${proposal.proposalNumber} from ${variables.companyName || 'SparkGenTechnology'}`);
       setMessage(
-        `Hello ${variables.contactPerson || 'Customer'},\n\nPlease find attached our proposal ${proposal.proposalNumber} from SparkGenTechnology.\n\nProposal Amount: ₹${variables.grandTotal}\n\nPlease feel free to contact us if you have any questions.\n\nRegards,\nSparkGenTechnology`
+        `Dear ${variables.customerName},\n\nPlease find attached the proposal ${proposal.proposalNumber}.\n\nRegards,\n${variables.companyName || 'SparkGenTechnology'}`
       );
     }
 

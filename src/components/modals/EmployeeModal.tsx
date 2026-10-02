@@ -191,6 +191,11 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ isOpen, onClose, e
       setPaymentMode(e.salaryDetails?.paymentMode || 'Bank Transfer');
 
       setHasLoginAccess(e.hasLoginAccess !== false);
+      setPassword('');
+      setConfirmPassword('');
+      setAccountStatus(e.status === 'inactive' || e.employmentStatus === 'Inactive' ? 'inactive' : 'active');
+      setChangePasswordMode(false);
+      setResetSentNotice(null);
       setPermissions(e.permissions || (e.role === 'admin' ? ADMIN_PERMISSIONS : DEFAULT_EMPLOYEE_PERMISSIONS));
     } else {
       setFirstName('');
@@ -224,7 +229,11 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ isOpen, onClose, e
       setDeductions(2500);
       setPaymentMode('Bank Transfer');
       setHasLoginAccess(true);
-      setTempPassword('Employee@2026');
+      setPassword('');
+      setConfirmPassword('');
+      setAccountStatus('active');
+      setChangePasswordMode(false);
+      setResetSentNotice(null);
       setPermissions(DEFAULT_EMPLOYEE_PERMISSIONS);
     }
     setError('');
@@ -261,18 +270,71 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ isOpen, onClose, e
     setPermissions(updated);
   };
 
+  const handleSendResetEmail = async () => {
+    if (!email.trim() || !email.includes('@')) {
+      setError('Please provide a valid employee email address.');
+      return;
+    }
+    setIsSendingReset(true);
+    setResetSentNotice(null);
+    setError('');
+    try {
+      const msg = await resetEmployeePassword(email.trim());
+      setResetSentNotice(msg);
+    } catch (e: any) {
+      setError(e.message || 'Failed to dispatch password reset email.');
+    } finally {
+      setIsSendingReset(false);
+    }
+  };
+
   const grossSalaryCalc = (Number(basicSalary) || 0) + (Number(hra) || 0) + (Number(allowances) || 0);
   const netSalaryCalc = Math.max(0, grossSalaryCalc - (Number(deductions) || 0));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+
+    // STEP 1: Validate employee information
     if (!firstName.trim()) {
-      setError('First name is required.');
+      setError('Employee First Name is required.');
+      setActiveTab('general');
       return;
     }
-    if (!email.trim()) {
-      setError('Email address is required.');
+    if (!email.trim() || !email.includes('@')) {
+      setError('A valid employee corporate email address is required.');
+      setActiveTab('account');
       return;
+    }
+
+    // STEP 2: Validate password requirements
+    if (!employeeToEdit && hasLoginAccess) {
+      if (!password) {
+        setError('Login Password is required to create the employee authentication account.');
+        setActiveTab('account');
+        return;
+      }
+      if (password.length < 8) {
+        setError('Password must be at least 8 characters long.');
+        setActiveTab('account');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('Password mismatch: Confirm password does not match the entered password.');
+        setActiveTab('account');
+        return;
+      }
+    } else if (employeeToEdit && changePasswordMode) {
+      if (password.length < 8) {
+        setError('New password must be at least 8 characters long.');
+        setActiveTab('account');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('Password mismatch: Confirm password does not match the new password.');
+        setActiveTab('account');
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -293,9 +355,10 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ isOpen, onClose, e
         managerId: managerId || undefined,
         managerName: employeeRecords.find((e) => e.id === managerId)?.name || undefined,
         joiningDate,
-        employmentStatus,
+        employmentStatus: accountStatus === 'inactive' ? 'Inactive' : employmentStatus,
+        status: accountStatus,
         hasLoginAccess,
-        password: tempPassword,
+        password: password || undefined,
         permissions: (roleName === 'Super Admin' || roleName === 'Admin') ? ADMIN_PERMISSIONS : permissions,
         address: {
           street: street.trim(),
@@ -368,22 +431,33 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ isOpen, onClose, e
         )}
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-3 gap-2 shrink-0">
+        <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-3 gap-2 shrink-0 overflow-x-auto">
           <button
             type="button"
             onClick={() => setActiveTab('general')}
-            className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors flex items-center gap-1.5 shrink-0 ${
               activeTab === 'general'
                 ? 'bg-white text-indigo-600 border-t-2 border-indigo-600 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <Briefcase className="w-3.5 h-3.5" /> General & Status
+            <Briefcase className="w-3.5 h-3.5" /> General Profile
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('account')}
+            className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors flex items-center gap-1.5 shrink-0 ${
+              activeTab === 'account'
+                ? 'bg-white text-indigo-600 border-t-2 border-indigo-600 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Lock className="w-3.5 h-3.5" /> Login Account
           </button>
           <button
             type="button"
             onClick={() => setActiveTab('role')}
-            className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors flex items-center gap-1.5 shrink-0 ${
               activeTab === 'role'
                 ? 'bg-white text-indigo-600 border-t-2 border-indigo-600 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -394,7 +468,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ isOpen, onClose, e
           <button
             type="button"
             onClick={() => setActiveTab('address')}
-            className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors flex items-center gap-1.5 shrink-0 ${
               activeTab === 'address'
                 ? 'bg-white text-indigo-600 border-t-2 border-indigo-600 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -405,7 +479,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ isOpen, onClose, e
           <button
             type="button"
             onClick={() => setActiveTab('bankSalary')}
-            className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors flex items-center gap-1.5 shrink-0 ${
               activeTab === 'bankSalary'
                 ? 'bg-white text-indigo-600 border-t-2 border-indigo-600 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -565,47 +639,334 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({ isOpen, onClose, e
                 </div>
               </div>
 
-              {/* Login Access Box */}
-              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 mt-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <UserCheck className="w-4 h-4 text-indigo-600" />
-                    <div>
-                      <span className="text-xs font-bold text-slate-900">Firebase Login Credentials</span>
-                      <p className="text-[11px] text-slate-500">
-                        Create secure Firebase Authentication account for system access at /login
-                      </p>
-                    </div>
+              {/* Quick Login Account Status Indicator */}
+              <div className="p-4 bg-indigo-50/60 rounded-xl border border-indigo-100 mt-4 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <Lock className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <div>
+                    <span className="text-xs font-bold text-slate-900 block">Login Account Credentials</span>
+                    <p className="text-[11px] text-slate-500">
+                      {employeeToEdit
+                        ? 'Account credentials active. Reset password or update status in the Login Account tab.'
+                        : 'Secure password & authentication setup configured under the Login Account tab.'}
+                    </p>
                   </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={hasLoginAccess}
-                      onChange={(e) => setHasLoginAccess(e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 bg-slate-300 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
-                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('account')}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer shrink-0"
+                >
+                  Configure Login →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: LOGIN ACCOUNT (PART 1 REQUIREMENTS) */}
+          {activeTab === 'account' && (
+            <div className="space-y-5">
+              <div className="p-4 bg-slate-900 text-white rounded-2xl flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white">
+                    <Lock className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold">Employee Login Account & Access Credentials</h4>
+                    <p className="text-[11px] text-slate-400">
+                      Provision official Firebase Authentication credentials. The current Administrator session remains active.
+                    </p>
+                  </div>
+                </div>
+                <span className={`px-2.5 py-1 rounded-full text-2xs font-bold uppercase tracking-wider ${
+                  accountStatus === 'active' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                }`}>
+                  ● {accountStatus === 'active' ? 'Account Active' : 'Account Inactive'}
+                </span>
+              </div>
+
+              {resetSentNotice && (
+                <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-xl flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{resetSentNotice}</span>
+                </div>
+              )}
+
+              {/* 8 REQUIRED FIELDS */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* 1. Employee Name */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">1. Employee Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={firstName ? `${firstName} ${lastName}`.trim() : ''}
+                    onChange={(e) => {
+                      const parts = e.target.value.split(' ');
+                      setFirstName(parts[0] || '');
+                      setLastName(parts.slice(1).join(' ') || '');
+                    }}
+                    placeholder="e.g. Ramesh Kumar"
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-xl px-3.5 py-2.5 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Full name as displayed on company proposals and reports</p>
                 </div>
 
-                {hasLoginAccess && !employeeToEdit && (
-                  <div className="mt-3 pt-3 border-t border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-3">
+                {/* 2. Employee Email */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">2. Employee Email *</label>
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="employee@sparkgentechnology.com"
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-xl px-3.5 py-2.5 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Primary corporate email used to sign in at /login</p>
+                </div>
+
+                {/* 3. Employee Role */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">3. Employee Role *</label>
+                  <select
+                    value={roleName}
+                    onChange={(e) => handleRoleSelection(e.target.value)}
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-xl px-3.5 py-2.5 bg-white focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="Sales Executive">Sales Executive</option>
+                    <option value="Senior Sales Executive">Senior Sales Executive</option>
+                    <option value="Sales Manager">Sales Manager</option>
+                    <option value="Technical Engineer">Technical Engineer</option>
+                    <option value="Support Representative">Support Representative</option>
+                    <option value="Finance & Accounts">Finance & Accounts</option>
+                    <option value="Admin">Administrator</option>
+                    {roleRecords
+                      .filter((r) => !['Sales Executive', 'Admin'].includes(r.name))
+                      .map((r) => (
+                        <option key={r.id} value={r.name}>
+                          {r.name}
+                        </option>
+                      ))}
+                  </select>
+                  <p className="text-[10px] text-slate-400 mt-1">Defines access level and module authorization</p>
+                </div>
+
+                {/* 4. Employee Department */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">4. Employee Department *</label>
+                  <select
+                    value={department}
+                    onChange={(e) => setDepartment(e.target.value)}
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-xl px-3.5 py-2.5 bg-white focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="Sales">Sales & Business Development</option>
+                    <option value="Technical">Technical & Solutions</option>
+                    <option value="Operations">Operations</option>
+                    <option value="Finance">Finance & Accounts</option>
+                    <option value="HR">Human Resources</option>
+                    <option value="Executive">Executive Leadership</option>
+                    {departmentRecords
+                      .filter((d) => !['Sales', 'Technical', 'Operations', 'Finance', 'HR', 'Executive'].includes(d.name))
+                      .map((d) => (
+                        <option key={d.id} value={d.name}>
+                          {d.name}
+                        </option>
+                      ))}
+                  </select>
+                  <p className="text-[10px] text-slate-400 mt-1">Organizational division</p>
+                </div>
+
+                {/* 5. Employee Designation */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">5. Employee Designation *</label>
+                  <input
+                    type="text"
+                    required
+                    value={designation}
+                    onChange={(e) => setDesignation(e.target.value)}
+                    placeholder="e.g. Sales Executive"
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-xl px-3.5 py-2.5 bg-white focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Corporate job title</p>
+                </div>
+
+                {/* 8. Account Status */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">8. Account Status *</label>
+                  <select
+                    value={accountStatus}
+                    onChange={(e) => {
+                      const st = e.target.value as 'active' | 'inactive';
+                      setAccountStatus(st);
+                      if (st === 'inactive') {
+                        setEmploymentStatus('Inactive');
+                      } else if (employmentStatus === 'Inactive') {
+                        setEmploymentStatus('Active');
+                      }
+                    }}
+                    className="w-full text-xs font-bold border border-slate-300 rounded-xl px-3.5 py-2.5 bg-white focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="active">ACTIVE — Full CRM Access Permitted</option>
+                    <option value="inactive">INACTIVE — Access Suspended</option>
+                  </select>
+                  <p className="text-[10px] text-slate-400 mt-1">Inactive accounts cannot access CRM operations</p>
+                </div>
+
+                {/* 6. Password & 7. Confirm Password */}
+                {!employeeToEdit ? (
+                  <>
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">Initial Password</label>
-                      <input
-                        type="text"
-                        value={tempPassword}
-                        onChange={(e) => setTempPassword(e.target.value)}
-                        className="w-full text-xs border border-slate-300 rounded-lg px-3 py-1.5 font-mono"
-                      />
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-xs font-bold text-slate-700">6. Password *</label>
+                        <span className="text-[10px] text-slate-500">Min 8 characters</span>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          required
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="••••••••••••"
+                          className="w-full text-xs font-mono border border-slate-300 rounded-xl pl-3.5 pr-10 py-2.5 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                          title={showPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1">Used by employee to log in at /login</p>
                     </div>
-                    <div className="flex items-end">
-                      <p className="text-[10px] text-slate-500 leading-tight">
-                        Employee can sign in at /login with their email and this password, or reset password at any time.
-                      </p>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-xs font-bold text-slate-700">7. Confirm Password *</label>
+                        {password && confirmPassword && (
+                          <span className={`text-[10px] font-bold ${password === confirmPassword ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {password === confirmPassword ? '✓ Passwords Match' : '✗ Does Not Match'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={showConfirmPassword ? 'text' : 'password'}
+                          required
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder="••••••••••••"
+                          className={`w-full text-xs font-mono border rounded-xl pl-3.5 pr-10 py-2.5 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden ${
+                            confirmPassword && password !== confirmPassword ? 'border-rose-400 ring-1 ring-rose-200' : 'border-slate-300'
+                          }`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                          title={showConfirmPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1">Must match the password entered above</p>
                     </div>
+                  </>
+                ) : (
+                  <div className="md:col-span-2 p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <span className="text-xs font-bold text-slate-800 block">Existing Account Security</span>
+                        <p className="text-[11px] text-slate-500">
+                          Password is cryptographically stored in Firebase Authentication. Plaintext password is never shown or stored in Firestore.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleSendResetEmail}
+                          disabled={isSendingReset}
+                          className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
+                        >
+                          {isSendingReset ? 'Sending Reset...' : 'Send Password Reset Email'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setChangePasswordMode(!changePasswordMode)}
+                          className="px-3.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-semibold transition-colors"
+                        >
+                          {changePasswordMode ? 'Cancel Password Change' : 'Set New Password'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {changePasswordMode && (
+                      <div className="pt-3 border-t border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="block text-xs font-bold text-slate-700">6. New Password</label>
+                            <span className="text-[10px] text-slate-500">Min 8 characters</span>
+                          </div>
+                          <div className="relative">
+                            <input
+                              type={showPassword ? 'text' : 'password'}
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              placeholder="••••••••••••"
+                              className="w-full text-xs font-mono border border-slate-300 rounded-xl pl-3.5 pr-10 py-2 bg-white"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword(!showPassword)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                            >
+                              {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="block text-xs font-bold text-slate-700">7. Confirm New Password</label>
+                            {password && confirmPassword && (
+                              <span className={`text-[10px] font-bold ${password === confirmPassword ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                {password === confirmPassword ? '✓ Matches' : '✗ Mismatch'}
+                              </span>
+                            )}
+                          </div>
+                          <div className="relative">
+                            <input
+                              type={showConfirmPassword ? 'text' : 'password'}
+                              value={confirmPassword}
+                              onChange={(e) => setConfirmPassword(e.target.value)}
+                              placeholder="••••••••••••"
+                              className="w-full text-xs font-mono border border-slate-300 rounded-xl pl-3.5 pr-10 py-2 bg-white"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                            >
+                              {showConfirmPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
+              </div>
+
+              {/* Zero-Trust Security Directive Notice */}
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 space-y-1">
+                <span className="font-bold text-slate-900 block">Security Policy Enforced:</span>
+                <p className="text-[11px] leading-relaxed">
+                  • Password is encrypted directly in Firebase Authentication using secure server-side provisioning.<br />
+                  • Plaintext passwords and hashes are <strong>never</strong> recorded in Firestore documents, employee profiles, or audit logs.<br />
+                  • The current Administrator session is preserved and will not be logged out when creating staff accounts.
+                </p>
               </div>
             </div>
           )}

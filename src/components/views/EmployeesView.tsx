@@ -21,6 +21,8 @@ import {
   ArrowLeft,
   Eye,
   Trash2,
+  Key,
+  CheckCircle,
 } from 'lucide-react';
 import { UserProfile, EmployeeRecord, EmploymentStatus } from '../../types/crm';
 import { useCrmData } from '../../context/CrmDataContext';
@@ -50,6 +52,7 @@ export const EmployeesView: React.FC = () => {
     calls,
     followups,
     stsRecords,
+    resetEmployeePassword,
   } = useCrmData();
   const { isAdmin } = useAuth();
 
@@ -57,6 +60,23 @@ export const EmployeesView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [deptFilter, setDeptFilter] = useState<string>('All');
+  const [toastNotice, setToastNotice] = useState<string | null>(null);
+  const [isResettingEmail, setIsResettingEmail] = useState<string | null>(null);
+
+  const handleSendResetPassword = async (email: string, name: string) => {
+    if (!email) return;
+    setIsResettingEmail(email);
+    try {
+      const msg = await resetEmployeePassword(email);
+      setToastNotice(msg || `If an account exists for ${email}, password reset instructions have been sent.`);
+      setTimeout(() => setToastNotice(null), 5000);
+    } catch (e: any) {
+      setToastNotice('Unable to send password reset email. Please try again.');
+      setTimeout(() => setToastNotice(null), 5000);
+    } finally {
+      setIsResettingEmail(null);
+    }
+  };
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [employeeToEdit, setEmployeeToEdit] = useState<EmployeeRecord | UserProfile | null>(null);
@@ -358,6 +378,18 @@ export const EmployeesView: React.FC = () => {
       {/* TAB 1: Team Directory & Permissions */}
       {activeTab === 'directory' && (
         <div className="space-y-4">
+          {toastNotice && (
+            <div className="p-3.5 bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-semibold rounded-2xl flex items-center justify-between shadow-2xs">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-indigo-600 shrink-0" />
+                <span>{toastNotice}</span>
+              </div>
+              <button onClick={() => setToastNotice(null)} className="text-slate-400 hover:text-slate-600 text-xs">
+                ✕
+              </button>
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="relative max-w-md flex-1">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -498,20 +530,52 @@ export const EmployeesView: React.FC = () => {
                                 <Shield className="w-3.5 h-3.5 text-slate-600" /> Edit
                               </button>
 
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    if (!emp.email) {
+                                      setToastNotice('No email configured for this employee record.');
+                                      return;
+                                    }
+                                    setIsResettingEmail(emp.email);
+                                    try {
+                                      const msg = await resetEmployeePassword(emp.email);
+                                      setToastNotice(msg || 'If an account exists for this email, password reset instructions have been sent.');
+                                    } catch {
+                                      setToastNotice('If an account exists for this email, password reset instructions have been sent.');
+                                    } finally {
+                                      setIsResettingEmail(null);
+                                    }
+                                  }}
+                                  disabled={isResettingEmail === emp.email}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg border border-amber-200 text-xs font-semibold transition"
+                                  title="Send Password Reset Email"
+                                >
+                                  <Key className="w-3.5 h-3.5" />
+                                  <span>{isResettingEmail === emp.email ? 'Sending...' : 'Reset Password'}</span>
+                                </button>
+                              )}
+
                               {emp.role !== 'admin' && (
                                 <button
+                                  type="button"
                                   onClick={() => handleToggleStatus(emp)}
-                                  className={`p-1.5 rounded-lg ${
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-semibold transition ${
                                     emp.employmentStatus === 'Active'
-                                      ? 'text-rose-600 hover:bg-rose-50'
-                                      : 'text-emerald-600 hover:bg-emerald-50'
+                                      ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border-rose-200'
+                                      : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border-emerald-200'
                                   }`}
-                                  title={emp.employmentStatus === 'Active' ? 'Deactivate Account' : 'Activate Account'}
+                                  title={emp.employmentStatus === 'Active' ? 'Disable Account' : 'Enable Account'}
                                 >
                                   {emp.employmentStatus === 'Active' ? (
-                                    <UserX className="w-3.5 h-3.5" />
+                                    <>
+                                      <UserX className="w-3.5 h-3.5 text-rose-600" /> Disable Account
+                                    </>
                                   ) : (
-                                    <UserCheck className="w-3.5 h-3.5" />
+                                    <>
+                                      <UserCheck className="w-3.5 h-3.5 text-emerald-600" /> Enable Account
+                                    </>
                                   )}
                                 </button>
                               )}

@@ -204,10 +204,16 @@ export const CustomerCommunicationTab: React.FC<CustomerCommunicationTabProps> =
             const isFailed = comm.status === 'Failed';
             const isOpened = comm.status === 'WHATSAPP_OPENED';
 
+            const fromAddress = (comm as any).fromEmail || (comm as any).senderEmail || comm.senderName || 'Official Company Email';
+            const recipientAddress = (comm as any).recipientEmail || comm.recipient;
+            const dateStr = new Date((comm as any).sentAt || comm.createdAt).toLocaleString();
+            const isProposalEmail = (comm.type as string) === 'Proposal Email' || comm.category === 'Proposal' || !!comm.proposalNumber;
+
             return (
               <div
                 key={comm.id}
-                className="p-4 bg-slate-900 border border-slate-800 rounded-2xl hover:border-slate-700 transition flex flex-col md:flex-row md:items-center justify-between gap-4"
+                onClick={() => setSelectedRecord(comm)}
+                className="p-4 bg-slate-900 border border-slate-800 rounded-2xl hover:border-slate-700 hover:bg-slate-900/80 transition flex flex-col md:flex-row md:items-center justify-between gap-4 cursor-pointer group"
               >
                 <div className="flex items-start gap-3">
                   <div
@@ -222,13 +228,22 @@ export const CustomerCommunicationTab: React.FC<CustomerCommunicationTabProps> =
 
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-bold text-white">{comm.subject || `${comm.channel} Message`}</span>
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300">
-                        {comm.category}
+                      {isProposalEmail && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-600/30 text-indigo-300 border border-indigo-500/30">
+                          Proposal Email
+                        </span>
+                      )}
+                      <span className="text-xs font-bold text-white group-hover:text-indigo-300 transition-colors">
+                        {comm.subject || `${comm.channel} Message`}
                       </span>
+                      {!isProposalEmail && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300">
+                          {comm.category}
+                        </span>
+                      )}
                       <span
                         className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          comm.status === 'Sent'
+                          comm.status === 'Sent' || (comm.status as string) === 'SENT'
                             ? 'bg-emerald-500/20 text-emerald-400'
                             : isOpened
                             ? 'bg-blue-500/20 text-blue-400'
@@ -244,11 +259,6 @@ export const CustomerCommunicationTab: React.FC<CustomerCommunicationTabProps> =
                           {comm.proposalNumber}
                         </span>
                       )}
-                      {comm.invoiceNumber && (
-                        <span className="text-[10px] font-mono text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
-                          {comm.invoiceNumber}
-                        </span>
-                      )}
                     </div>
 
                     <p className="text-xs text-slate-400 line-clamp-2 max-w-2xl font-mono leading-relaxed">
@@ -256,16 +266,16 @@ export const CustomerCommunicationTab: React.FC<CustomerCommunicationTabProps> =
                     </p>
 
                     <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 pt-1">
-                      <span>Recipient: <strong className="text-slate-400">{comm.recipient}</strong></span>
+                      <span>Recipient: <strong className="text-slate-300">{recipientAddress}</strong></span>
                       <span>•</span>
-                      <span>By: <strong className="text-slate-400">{comm.senderName}</strong></span>
+                      <span>From: <strong className="text-slate-300">{fromAddress}</strong></span>
                       <span>•</span>
-                      <span>{new Date(comm.createdAt).toLocaleString()}</span>
+                      <span>Date: <strong className="text-slate-400">{dateStr}</strong></span>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                <div className="flex items-center gap-2 shrink-0 self-end md:self-center" onClick={(e) => e.stopPropagation()}>
                   {isFailed && (
                     <button
                       onClick={() => retryCommunicationRecord(comm)}
@@ -339,20 +349,46 @@ export const CustomerCommunicationTab: React.FC<CustomerCommunicationTabProps> =
 
             <div className="space-y-2 text-xs">
               <div className="flex justify-between py-1 border-b border-slate-800/60">
-                <span className="text-slate-400 font-semibold">Channel / Type:</span>
-                <span className="text-white font-mono">{selectedRecord.channel} • {selectedRecord.type} ({selectedRecord.category})</span>
+                <span className="text-slate-400 font-semibold">Communication Type:</span>
+                <span className="text-indigo-400 font-bold">{selectedRecord.type || selectedRecord.category || 'Proposal Email'}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-800/60">
+                <span className="text-slate-400 font-semibold">Subject:</span>
+                <span className="text-white font-medium">{selectedRecord.subject || 'Commercial Proposal'}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-800/60">
                 <span className="text-slate-400 font-semibold">Recipient:</span>
-                <span className="text-white">{selectedRecord.recipient}</span>
+                <span className="text-white font-mono">{(selectedRecord as any).recipientEmail || selectedRecord.recipient}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-800/60">
+                <span className="text-slate-400 font-semibold">From (Official Company Email):</span>
+                <span className="text-white font-mono">{(selectedRecord as any).fromEmail || (selectedRecord as any).senderEmail || selectedRecord.senderName || 'Official Company Email'}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-800/60">
+                <span className="text-slate-400 font-semibold">Date & Time:</span>
+                <span className="text-white">{new Date((selectedRecord as any).sentAt || selectedRecord.createdAt).toLocaleString()}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-800/60">
                 <span className="text-slate-400 font-semibold">Status:</span>
-                <span className="font-bold text-emerald-400">{selectedRecord.status}</span>
+                <span className={`font-bold ${
+                  selectedRecord.status === 'Sent' || (selectedRecord.status as string) === 'SENT' ? 'text-emerald-400' : 'text-rose-400'
+                }`}>{selectedRecord.status}</span>
               </div>
+              {(selectedRecord as any).provider && (
+                <div className="flex justify-between py-1 border-b border-slate-800/60">
+                  <span className="text-slate-400 font-semibold">Provider:</span>
+                  <span className="text-slate-300 font-mono uppercase">{(selectedRecord as any).provider}</span>
+                </div>
+              )}
+              {selectedRecord.proposalNumber && (
+                <div className="flex justify-between py-1 border-b border-slate-800/60">
+                  <span className="text-slate-400 font-semibold">Proposal Reference:</span>
+                  <span className="text-purple-300 font-mono font-bold">{selectedRecord.proposalNumber}</span>
+                </div>
+              )}
               {selectedRecord.providerMessageId && (
                 <div className="flex justify-between py-1 border-b border-slate-800/60">
-                  <span className="text-slate-400 font-semibold">Provider ID:</span>
+                  <span className="text-slate-400 font-semibold">Provider Message ID:</span>
                   <span className="text-slate-300 font-mono text-[11px]">{selectedRecord.providerMessageId}</span>
                 </div>
               )}

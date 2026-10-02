@@ -159,6 +159,9 @@ function MainApp() {
     if (pathnameLower.startsWith('/admin/hr') || pathnameLower.includes('/settings/roles')) {
       return 'hr';
     }
+    if (pathnameLower.startsWith('/settings') || pathnameLower.includes('/settings')) {
+      return 'settings';
+    }
     if (viewSegment === 'sales') return 'sales';
     if (viewSegment === 'communication') return 'communication';
     if (viewSegment === 'inventory') return 'inventory';
@@ -641,7 +644,11 @@ function MainApp() {
           {activeView === 'settings' && (
             <SettingsView
               initialTab={
-                window.location.pathname.includes('/settings/bank') || window.location.pathname.includes('/settings/bank-accounts')
+                window.location.pathname.includes('/settings/email-templates') || window.location.pathname.includes('/settings/templates')
+                  ? 'email-templates'
+                  : window.location.pathname.includes('/settings/email') || window.location.pathname.includes('/settings/communication/email')
+                  ? 'email'
+                  : window.location.pathname.includes('/settings/bank') || window.location.pathname.includes('/settings/bank-accounts')
                   ? 'bank'
                   : window.location.pathname.includes('/settings/products')
                   ? 'products'

@@ -2,16 +2,32 @@ import { Customer, Lead, ProposalRecord, UserProfile } from '../types/crm';
 
 export interface TemplateVariables {
   customerName?: string;
-  contactPerson?: string;
   companyName?: string;
   proposalNumber?: string;
+  proposalAmount?: string | number;
+  proposalLink?: string;
+  employeeName?: string;
+  contactPerson?: string;
   grandTotal?: string | number;
   validUntil?: string;
-  employeeName?: string;
   employeePhone?: string;
   employeeEmail?: string;
   secureProposalLink?: string;
   [key: string]: string | number | undefined;
+}
+
+/**
+ * Strips dangerous HTML, script tags, event handlers and unsafe schemes
+ */
+export function sanitizeEmailContent(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '')
+    .replace(/<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi, '')
+    .replace(/\bon\w+\s*=\s*(['"]).*?\1/gi, '')
+    .replace(/javascript:[^"']*/gi, '');
 }
 
 /**
@@ -24,45 +40,42 @@ export function buildTemplateVariables(
   employee?: UserProfile | null,
   appUrl?: string
 ): TemplateVariables {
-  const compName =
-    proposal?.customerName ||
-    customer?.companyName ||
-    lead?.companyName ||
-    '';
+  // Official company name
+  const officialCompanyName = 'SparkGenTechnology';
 
-  const contact =
-    customer?.contactPerson ||
-    lead?.contactPerson ||
-    proposal?.customerSnapshot?.contactPerson ||
-    'Valued Client';
-
+  // Customer name
   const custName =
     customer?.contactPerson ||
     customer?.companyName ||
     lead?.contactPerson ||
     lead?.companyName ||
-    compName;
+    proposal?.customerSnapshot?.contactPerson ||
+    proposal?.customerName ||
+    'Valued Client';
 
   const propNum = proposal?.proposalNumber || '';
   const total = proposal?.grandTotal !== undefined ? proposal.grandTotal.toLocaleString('en-IN') : '';
   const validUntil = proposal?.validUntil ? new Date(proposal.validUntil).toLocaleDateString('en-IN') : '';
 
-  const empName = employee?.name || proposal?.assignedEmployeeName || proposal?.createdByName || 'SparkGenTechnology Team';
+  const empName = employee?.name || proposal?.assignedEmployeeName || proposal?.createdByName || 'Administrator';
   const empPhone = employee?.mobile || '+91 98765 43210';
   const empEmail = employee?.email || 'sales@sparkgentechnology.com';
 
-  const baseUrl = appUrl || window.location.origin;
+  const baseUrl = appUrl || (typeof window !== 'undefined' ? window.location.origin : '');
   const token = proposal?.viewToken || proposal?.id || proposal?.proposalNumber;
   const proposalLink = token ? `${baseUrl}/proposal/${token}` : '';
 
   return {
     customerName: custName,
-    contactPerson: contact,
-    companyName: compName,
+    companyName: officialCompanyName,
     proposalNumber: propNum,
+    proposalAmount: total,
+    proposalLink,
+    employeeName: empName,
+    // Backwards compatible aliases
+    contactPerson: custName,
     grandTotal: total,
     validUntil,
-    employeeName: empName,
     employeePhone: empPhone,
     employeeEmail: empEmail,
     secureProposalLink: proposalLink,
@@ -72,15 +85,18 @@ export function buildTemplateVariables(
 /**
  * Replaces {{variable}} placeholders with real values.
  * Never inserts "undefined" or "null".
+ * Strips dangerous HTML/script injection.
  */
 export function interpolateEmailTemplate(templateText: string, variables: TemplateVariables): string {
   if (!templateText) return '';
 
-  return templateText.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
+  const sanitized = sanitizeEmailContent(templateText);
+
+  return sanitized.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
     const val = variables[key];
     if (val === undefined || val === null) {
       return '';
     }
-    return String(val);
+    return sanitizeEmailContent(String(val));
   });
 }

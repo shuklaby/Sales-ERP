@@ -730,10 +730,10 @@ export const defaultEmailTemplates: EmailTemplate[] = [
   {
     id: 'tpl_proposal_default',
     templateId: 'TPL-PROP-01',
-    templateName: 'Standard Proposal Dispatch',
+    templateName: 'Proposal Email',
     type: 'Proposal Email',
-    subject: 'Proposal {{proposalNumber}} from SparkGenTechnology',
-    body: 'Hello {{contactPerson}},\n\nPlease find attached our commercial proposal {{proposalNumber}} for {{companyName}}.\n\nProposal Amount: ₹{{grandTotal}}\nValid Until: {{validUntil}}\nProposal Link:\n{{secureProposalLink}}\n\nPlease feel free to contact us if you have any questions.\n\nRegards,\n{{employeeName}}\n{{employeePhone}}\nSparkGenTechnology',
+    subject: 'Proposal {{proposalNumber}} from {{companyName}}',
+    body: 'Dear {{customerName}},\n\nPlease find attached the proposal {{proposalNumber}}.\n\nProposal Amount: ₹{{proposalAmount}}\nProposal Link:\n{{proposalLink}}\n\nRegards,\n{{companyName}}',
     status: 'active',
     createdBy: 'system',
     createdAt: new Date().toISOString(),
@@ -5548,6 +5548,41 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
         await setDoc(doc(db, 'emails', emailId), cleanDataForFirestore(sentRecord));
 
+        // Part 4 requirement: Store proposal email status and history
+        const commDocId = `comm_${emailId}`;
+        const commRecord = {
+          id: commDocId,
+          channel: 'EMAIL' as const,
+          type: 'Proposal Email' as const,
+          category: 'Proposal' as const,
+          proposalId: params.proposal.id,
+          proposalNumber: params.proposal.proposalNumber,
+          customerId: params.proposal.customerId,
+          customerName: params.proposal.customerName,
+          recipient: params.to,
+          recipientEmail: params.to,
+          fromEmail: emailSettings.senderEmail || 'sales@sparkgentechnology.com',
+          senderEmail: emailSettings.senderEmail || 'sales@sparkgentechnology.com',
+          senderName: emailSettings.senderName || 'SparkGenTechnology',
+          subject: params.subject,
+          body: params.message,
+          provider: (emailSettings.provider || 'smtp').toUpperCase(),
+          status: 'SENT',
+          sentAt: nowIso,
+          messageId: resData.providerMessageId || '',
+          providerMessageId: resData.providerMessageId || '',
+          attachmentName: params.attachmentName || `${params.proposal.proposalNumber}.pdf`,
+          hasAttachment: !!params.pdfBase64,
+          attachmentSize,
+          createdBy: empId,
+          createdAt: nowIso,
+        };
+        try {
+          await setDoc(doc(db, 'communicationRecords', commDocId), cleanDataForFirestore(commRecord));
+        } catch (commErr) {
+          console.warn('Failed to record in communicationRecords:', commErr);
+        }
+
         // If status is Draft or Generated, update to Sent (Section 9)
         if (params.proposal.status === 'Draft' || params.proposal.status === 'Generated') {
           await updateDoc(doc(db, 'proposals', params.proposal.id), {
@@ -5621,6 +5656,41 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         };
 
         await setDoc(doc(db, 'emails', emailId), cleanDataForFirestore(failedRecord));
+
+        // Part 4 requirement: Record failed email status in communicationRecords
+        const failedCommDocId = `comm_${emailId}`;
+        const failedCommRecord = {
+          id: failedCommDocId,
+          channel: 'EMAIL' as const,
+          type: 'Proposal Email' as const,
+          category: 'Proposal' as const,
+          proposalId: params.proposal.id,
+          proposalNumber: params.proposal.proposalNumber,
+          customerId: params.proposal.customerId,
+          customerName: params.proposal.customerName,
+          recipient: params.to,
+          recipientEmail: params.to,
+          fromEmail: emailSettings.senderEmail || 'sales@sparkgentechnology.com',
+          senderEmail: emailSettings.senderEmail || 'sales@sparkgentechnology.com',
+          senderName: emailSettings.senderName || 'SparkGenTechnology',
+          subject: params.subject,
+          body: params.message,
+          provider: (emailSettings.provider || 'smtp').toUpperCase(),
+          status: 'FAILED',
+          errorMessage: errorMsg,
+          attachmentName: params.attachmentName || `${params.proposal.proposalNumber}.pdf`,
+          hasAttachment: !!params.pdfBase64,
+          attachmentSize,
+          sentAt: nowIso,
+          messageId: '',
+          createdBy: empId,
+          createdAt: nowIso,
+        };
+        try {
+          await setDoc(doc(db, 'communicationRecords', failedCommDocId), cleanDataForFirestore(failedCommRecord));
+        } catch (commErr) {
+          console.warn('Failed to record failed status in communicationRecords:', commErr);
+        }
 
         await logActivity(
           'EMAIL_FAILED',
