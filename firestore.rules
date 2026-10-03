@@ -295,7 +295,7 @@ service cloud.firestore {
     // Email Configuration & Settings (Phase 9)
     match /emailSettings/{docId} {
       allow read: if true;
-      allow write: if isSuperAdmin();
+      allow write: if isSuperAdmin() || isActiveEmployee();
     }
 
     // Notifications (Phase 9)

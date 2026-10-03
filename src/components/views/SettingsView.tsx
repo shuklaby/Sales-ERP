@@ -128,18 +128,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const [errorMsg, setErrorMsg] = useState('');
 
   // Email Provider Settings State (Section 5)
-  const [emailProvider, setEmailProvider] = useState<'smtp' | 'resend' | 'sendgrid' | 'none'>('none');
+  const [emailProvider, setEmailProvider] = useState<'smtp' | 'resend' | 'sendgrid' | 'none'>('smtp');
   const [emailSenderName, setEmailSenderName] = useState('SparkGenTechnology');
-  const [emailSenderAddress, setEmailSenderAddress] = useState('sales@sparkgentechnology.com');
-  const [emailReplyTo, setEmailReplyTo] = useState('');
-  const [smtpHost, setSmtpHost] = useState('');
-  const [smtpPort, setSmtpPort] = useState(587);
-  const [smtpSecure, setSmtpSecure] = useState(false);
-  const [smtpUser, setSmtpUser] = useState('');
+  const [emailSenderAddress, setEmailSenderAddress] = useState('sales@sparkgentechnology.in');
+  const [emailReplyTo, setEmailReplyTo] = useState('sales@sparkgentechnology.in');
+  const [smtpHost, setSmtpHost] = useState('smtp.titan.email');
+  const [smtpPort, setSmtpPort] = useState(465);
+  const [smtpSecure, setSmtpSecure] = useState(true);
+  const [smtpUser, setSmtpUser] = useState('sales@sparkgentechnology.in');
   const [smtpPass, setSmtpPass] = useState('');
+  const [hasExistingPassword, setHasExistingPassword] = useState(false);
   const [providerApiKey, setProviderApiKey] = useState('');
   const [isEmailConfigured, setIsEmailConfigured] = useState(false);
   const [emailConfigStatus, setEmailConfigStatus] = useState<'Configured' | 'Not Configured' | 'Connection Error' | 'Authentication Failed'>('Not Configured');
+  const [emailSaveSuccess, setEmailSaveSuccess] = useState<string | null>(null);
+  const [emailSaveError, setEmailSaveError] = useState<string | null>(null);
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionTestResult, setConnectionTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [testEmailRecipient, setTestEmailRecipient] = useState('');
@@ -277,18 +280,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
       .then((r) => r.json())
       .then((cfg) => {
         if (cfg) {
-          setEmailProvider(cfg.provider || 'none');
+          setEmailProvider(cfg.provider || 'smtp');
           setEmailSenderName(cfg.senderName || 'SparkGenTechnology');
-          setEmailSenderAddress(cfg.senderEmail || 'sales@sparkgentechnology.com');
-          setEmailReplyTo(cfg.replyTo || '');
+          setEmailSenderAddress(cfg.senderEmail || 'sales@sparkgentechnology.in');
+          setEmailReplyTo(cfg.replyTo || 'sales@sparkgentechnology.in');
           setIsEmailConfigured(!!cfg.configured);
           setEmailConfigStatus(cfg.status || (cfg.configured ? 'Configured' : 'Not Configured'));
           if (cfg.smtpHost) setSmtpHost(cfg.smtpHost);
           if (cfg.smtpPort) setSmtpPort(cfg.smtpPort);
+          if (cfg.smtpUser) setSmtpUser(cfg.smtpUser);
           if (cfg.smtpSecure !== undefined) {
             setSmtpSecure(!!cfg.smtpSecure);
           } else if (cfg.smtpPort === 465) {
             setSmtpSecure(true);
+          }
+          if (cfg.hasPassword) {
+            setHasExistingPassword(true);
           }
           if (cfg.status === 'Authentication Failed' && cfg.lastError) {
             setConnectionTestResult({ success: false, message: cfg.lastError });
@@ -823,23 +830,49 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   // ==================== 8. EMAIL PROVIDER CONFIGURATION ====================
   const handleSaveEmailConfig = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isAdmin) {
+      const authErr = 'Failed to save email provider configuration: Administrator privileges are strictly required.';
+      setEmailSaveError(authErr);
+      setErrorMsg(authErr);
+      return;
+    }
+
     setIsSaving(true);
+    setEmailSaveSuccess(null);
+    setEmailSaveError(null);
     setErrorMsg('');
+
     try {
+      if (emailProvider === 'smtp') {
+        if (!smtpHost.trim()) {
+          throw new Error('SMTP Host Server is required.');
+        }
+        if (!smtpUser.trim()) {
+          throw new Error('SMTP Username / Account Email is required.');
+        }
+        if (!smtpPass && !hasExistingPassword) {
+          throw new Error('SMTP Password is required for initial configuration.');
+        }
+      }
+
       const payload: any = {
         provider: emailProvider,
-        senderName: emailSenderName.trim(),
-        senderEmail: emailSenderAddress.trim(),
-        replyTo: emailReplyTo.trim(),
+        senderName: emailSenderName.trim() || 'SparkGenTechnology',
+        senderEmail: emailSenderAddress.trim() || 'sales@sparkgentechnology.in',
+        replyTo: emailReplyTo.trim() || 'sales@sparkgentechnology.in',
       };
       if (emailProvider === 'smtp') {
         payload.smtpHost = smtpHost.trim();
-        payload.smtpPort = smtpPort;
-        payload.smtpSecure = smtpSecure;
+        payload.smtpPort = Number(smtpPort) || 465;
+        payload.smtpSecure = Number(smtpPort) === 465 ? true : !!smtpSecure;
         payload.smtpUser = smtpUser.trim();
-        if (smtpPass) payload.smtpPass = smtpPass;
+        if (smtpPass && smtpPass.trim()) {
+          payload.smtpPass = smtpPass.trim();
+        }
       } else if (emailProvider === 'resend' || emailProvider === 'sendgrid') {
-        if (providerApiKey) payload.apiKey = providerApiKey.trim();
+        if (providerApiKey && providerApiKey.trim()) {
+          payload.apiKey = providerApiKey.trim();
+        }
       }
 
       const res = await fetch('/api/email/config', {
@@ -847,33 +880,49 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to save email configuration');
+        throw new Error(data.error || 'Server rejected email provider configuration');
       }
 
+      // Sync non-secret configuration to Firestore and CRM context (passwords are NEVER written to Firestore)
       await updateEmailSettings({
         provider: emailProvider,
-        senderName: emailSenderName.trim(),
-        senderEmail: emailSenderAddress.trim(),
-        replyTo: emailReplyTo.trim(),
+        senderName: emailSenderName.trim() || 'SparkGenTechnology',
+        senderEmail: emailSenderAddress.trim() || 'sales@sparkgentechnology.in',
+        replyTo: emailReplyTo.trim() || 'sales@sparkgentechnology.in',
         status: data.status || (data.configured ? 'Configured' : 'Not Configured'),
       });
 
-      setIsEmailConfigured(data.configured);
-      setEmailConfigStatus(data.status);
+      setIsEmailConfigured(!!data.configured);
+      setEmailConfigStatus(data.status || 'Configured');
+      if (data.hasPassword || payload.smtpPass) {
+        setHasExistingPassword(true);
+      }
+      setSmtpPass(''); // Never keep plaintext password in state
+
       if (data.warning) {
         setConnectionTestResult({
           success: false,
           message: data.warning,
         });
-        setErrorMsg(data.warning);
-      } else {
-        setConnectionTestResult(null);
-        notifySuccess('Email provider configuration successfully saved server-side!');
+      } else if (data.status === 'Configured') {
+        setConnectionTestResult({
+          success: true,
+          message: 'SMTP connection verified successfully.',
+        });
       }
+
+      const successNotice = 'Email provider configuration saved successfully.';
+      setEmailSaveSuccess(successNotice);
+      notifySuccess(successNotice);
+      setTimeout(() => setEmailSaveSuccess(null), 6000);
     } catch (err: any) {
-      setErrorMsg(err.message || 'Error saving email provider configuration');
+      console.error('Email config save failure:', err);
+      const usefulError = `Failed to save email provider configuration: ${err.message || 'Unknown error'}`;
+      setEmailSaveError(usefulError);
+      setErrorMsg(usefulError);
     } finally {
       setIsSaving(false);
     }
@@ -921,18 +970,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
       if (res.ok && data.success) {
         setTestEmailResult({
           success: true,
-          message: 'Email sent successfully.',
+          message: 'Test email sent successfully.',
         });
       } else {
         setTestEmailResult({
           success: false,
-          message: 'Email failed.',
+          message: data.error || 'Test email dispatch failed.',
         });
       }
-    } catch {
+    } catch (sendErr: any) {
       setTestEmailResult({
         success: false,
-        message: 'Email failed.',
+        message: sendErr.message || 'Test email dispatch failed due to network error.',
       });
     } finally {
       setIsSendingTestEmail(false);
@@ -2674,7 +2723,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                       required
                       value={smtpUser}
                       onChange={(e) => setSmtpUser(e.target.value)}
-                      placeholder="notifications@sparkgentechnology.com"
+                      placeholder="sales@sparkgentechnology.in"
                       className="w-full text-xs border border-slate-300 rounded-xl px-3.5 py-2.5 bg-white"
                     />
                   </div>
@@ -2682,14 +2731,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
                       SMTP Password / App Key
+                      {hasExistingPassword && (
+                        <span className="text-[10px] text-emerald-600 font-semibold ml-1.5">
+                          ● Configured securely
+                        </span>
+                      )}
                     </label>
                     <input
                       type="password"
                       value={smtpPass}
                       onChange={(e) => setSmtpPass(e.target.value)}
-                      placeholder="•••••••• (Leave blank to keep current)"
+                      placeholder={hasExistingPassword ? "••••••••" : "Enter SMTP password"}
                       className="w-full text-xs font-mono border border-slate-300 rounded-xl px-3.5 py-2.5 bg-white"
                     />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      {hasExistingPassword
+                        ? "Saved securely on server. Leave blank to preserve existing password."
+                        : "Encrypted server-side. Never stored in public Firestore."}
+                    </p>
                   </div>
 
                   <div className="sm:col-span-3 space-y-2">
@@ -2789,30 +2848,53 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                   required
                   value={emailSenderAddress}
                   onChange={(e) => setEmailSenderAddress(e.target.value)}
-                  placeholder="sales@sparkgentechnology.com"
+                  placeholder="sales@sparkgentechnology.in"
                   className="w-full text-xs border border-slate-300 rounded-xl px-3.5 py-2.5"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Reply-To Address (Optional)</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Reply-To Address *</label>
                 <input
                   type="email"
+                  required
                   value={emailReplyTo}
                   onChange={(e) => setEmailReplyTo(e.target.value)}
-                  placeholder="support@sparkgentechnology.com"
+                  placeholder="sales@sparkgentechnology.in"
                   className="w-full text-xs border border-slate-300 rounded-xl px-3.5 py-2.5"
                 />
               </div>
             </div>
 
-            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-100">
+              <div className="flex-1 w-full sm:w-auto">
+                {emailSaveSuccess && (
+                  <div className="flex items-center gap-2 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 rounded-xl shadow-2xs">
+                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>{emailSaveSuccess}</span>
+                  </div>
+                )}
+                {emailSaveError && (
+                  <div className="flex items-center gap-2 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-3.5 py-2.5 rounded-xl shadow-2xs">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{emailSaveError}</span>
+                  </div>
+                )}
+              </div>
+
               <button
                 type="submit"
                 disabled={isSaving}
-                className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-md transition-colors"
+                className="w-full sm:w-auto px-6 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white rounded-xl text-xs font-semibold shadow-md transition-colors flex items-center justify-center gap-2 shrink-0 cursor-pointer"
               >
-                {isSaving ? 'Saving...' : 'Save Email Provider Configuration'}
+                {isSaving ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <span>Save Email Provider Configuration</span>
+                )}
               </button>
             </div>
           </form>

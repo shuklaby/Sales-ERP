@@ -23,6 +23,8 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Server-side persistent storage for email config (no secrets sent to frontend)
 const CONFIG_FILE_PATH = path.resolve(process.cwd(), '.email-config.json');
+const TMP_CONFIG_FILE_PATH = path.resolve('/tmp', '.email-config.json');
+let inMemoryEmailConfig: StoredEmailConfig | null = null;
 
 // Read Firebase Web API Key for server-side Auth management (creating employee accounts without logging out admin)
 const FIREBASE_CONFIG_PATH = path.resolve(process.cwd(), 'firebase-applet-config.json');
@@ -55,47 +57,63 @@ interface StoredEmailConfig {
 
 function getStoredEmailConfig(): StoredEmailConfig {
   let cfg: StoredEmailConfig = {
-    provider: 'none',
+    provider: 'smtp',
     senderName: 'SparkGenTechnology',
-    senderEmail: 'sales@sparkgentechnology.com',
+    senderEmail: 'sales@sparkgentechnology.in',
+    replyTo: 'sales@sparkgentechnology.in',
+    smtpHost: 'smtp.titan.email',
+    smtpPort: 465,
+    smtpSecure: true,
+    smtpUser: 'sales@sparkgentechnology.in',
   };
+
+  if (inMemoryEmailConfig) {
+    cfg = { ...cfg, ...inMemoryEmailConfig };
+  }
 
   try {
     if (fs.existsSync(CONFIG_FILE_PATH)) {
       const data = fs.readFileSync(CONFIG_FILE_PATH, 'utf-8');
-      cfg = JSON.parse(data);
+      const parsed = JSON.parse(data);
+      cfg = { ...cfg, ...parsed };
+    } else if (fs.existsSync(TMP_CONFIG_FILE_PATH)) {
+      const data = fs.readFileSync(TMP_CONFIG_FILE_PATH, 'utf-8');
+      const parsed = JSON.parse(data);
+      cfg = { ...cfg, ...parsed };
     }
   } catch (e) {
-    console.warn('Could not read email config file:', e);
+    // quiet fallback
   }
 
-  // Fallback to process.env
-  if (cfg.provider === 'none') {
+  // Fallback to process.env if available
+  if (cfg.provider === 'none' || !cfg.smtpPass) {
     const envHost = process.env.SMTP_HOST;
     const envUser = process.env.SMTP_USER;
     const envPass = process.env.SMTP_PASSWORD || process.env.SMTP_PASS;
     const envFrom = process.env.EMAIL_FROM || process.env.SMTP_FROM || envUser;
     const envFromName = process.env.EMAIL_FROM_NAME || process.env.SMTP_FROM_NAME || 'SparkGenTechnology';
-    const envReplyTo = process.env.EMAIL_REPLY_TO || process.env.SMTP_REPLY_TO || '';
-    const envProvider = (process.env.EMAIL_PROVIDER as any) || (envHost ? 'smtp' : 'none');
+    const envReplyTo = process.env.EMAIL_REPLY_TO || process.env.SMTP_REPLY_TO || 'sales@sparkgentechnology.in';
+    const envProvider = (process.env.EMAIL_PROVIDER as any) || (envHost ? 'smtp' : cfg.provider);
 
     if (envHost && envUser) {
       cfg = {
+        ...cfg,
         provider: envProvider,
         senderName: envFromName,
-        senderEmail: envFrom || 'sales@sparkgentechnology.com',
+        senderEmail: envFrom || 'sales@sparkgentechnology.in',
         replyTo: envReplyTo,
         smtpHost: envHost,
-        smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
+        smtpPort: parseInt(process.env.SMTP_PORT || '465', 10),
         smtpSecure: process.env.SMTP_SECURE === 'true' || process.env.SMTP_PORT === '465',
         smtpUser: envUser,
-        smtpPass: envPass || '',
+        smtpPass: envPass || cfg.smtpPass || '',
       };
     } else if (process.env.RESEND_API_KEY) {
       cfg = {
+        ...cfg,
         provider: 'resend',
         senderName: process.env.SENDER_NAME || 'SparkGenTechnology',
-        senderEmail: process.env.SENDER_EMAIL || 'proposals@sparkgentechnology.com',
+        senderEmail: process.env.SENDER_EMAIL || 'sales@sparkgentechnology.in',
         apiKey: process.env.RESEND_API_KEY,
       };
     }
@@ -115,10 +133,15 @@ function getStoredEmailConfig(): StoredEmailConfig {
 }
 
 function saveStoredEmailConfig(config: StoredEmailConfig) {
+  inMemoryEmailConfig = { ...config };
   try {
     fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(config, null, 2), 'utf-8');
-  } catch (e) {
-    console.warn('Failed to save email config file:', e);
+  } catch {
+    try {
+      fs.writeFileSync(TMP_CONFIG_FILE_PATH, JSON.stringify(config, null, 2), 'utf-8');
+    } catch {
+      // Memory cache preserved
+    }
   }
 }
 
@@ -195,14 +218,16 @@ app.get('/api/email/config', (req, res) => {
     configured: !!config.configured,
     provider: config.provider,
     senderName: config.senderName || 'SparkGenTechnology',
-    senderEmail: config.senderEmail || 'sales@sparkgentechnology.com',
-    replyTo: config.replyTo || '',
+    senderEmail: config.senderEmail || 'sales@sparkgentechnology.in',
+    replyTo: config.replyTo || 'sales@sparkgentechnology.in',
     status: config.status || (config.configured ? 'Configured' : 'Not Configured'),
     lastError: config.lastError,
     smtpHost: config.smtpHost ? `${config.smtpHost}` : undefined,
-    smtpPort: config.smtpPort,
-    smtpSecure: !!config.smtpSecure,
+    smtpPort: config.smtpPort || 465,
+    smtpSecure: config.smtpPort === 465 ? true : !!config.smtpSecure,
+    smtpUser: config.smtpUser || '',
     smtpUserMasked: config.smtpUser ? `${config.smtpUser.slice(0, 3)}***` : undefined,
+    hasPassword: !!config.smtpPass,
   });
 });
 
@@ -223,20 +248,21 @@ app.post('/api/email/config', async (req, res) => {
     } = req.body;
 
     const existing = getStoredEmailConfig();
-    const resolvedPort = smtpPort ? parseInt(smtpPort, 10) : (existing.smtpPort || 587);
-    const resolvedSecure = resolvedPort === 465 ? true : (smtpSecure !== undefined ? !!smtpSecure : (existing.smtpSecure || false));
+    const resolvedPort = smtpPort ? parseInt(smtpPort, 10) : (existing.smtpPort || 465);
+    const resolvedSecure = resolvedPort === 465 ? true : (smtpSecure !== undefined ? !!smtpSecure : (existing.smtpSecure ?? true));
+    const effectivePass = (smtpPass && smtpPass.trim()) ? smtpPass.trim() : existing.smtpPass;
 
     const updated: StoredEmailConfig = {
-      provider: provider || 'none',
-      senderName: senderName || 'SparkGenTechnology',
-      senderEmail: senderEmail || 'sales@sparkgentechnology.com',
-      replyTo: replyTo || '',
-      smtpHost: smtpHost !== undefined ? smtpHost : existing.smtpHost,
+      provider: provider || 'smtp',
+      senderName: (senderName && senderName.trim()) || existing.senderName || 'SparkGenTechnology',
+      senderEmail: (senderEmail && senderEmail.trim()) || existing.senderEmail || 'sales@sparkgentechnology.in',
+      replyTo: (replyTo && replyTo.trim()) || 'sales@sparkgentechnology.in',
+      smtpHost: (smtpHost !== undefined && smtpHost !== '') ? smtpHost.trim() : (existing.smtpHost || 'smtp.titan.email'),
       smtpPort: resolvedPort,
       smtpSecure: resolvedSecure,
-      smtpUser: smtpUser !== undefined ? smtpUser : existing.smtpUser,
-      smtpPass: smtpPass ? smtpPass : existing.smtpPass, // only overwrite if provided
-      apiKey: apiKey ? apiKey : existing.apiKey,
+      smtpUser: (smtpUser !== undefined && smtpUser !== '') ? smtpUser.trim() : (existing.smtpUser || 'sales@sparkgentechnology.in'),
+      smtpPass: effectivePass,
+      apiKey: apiKey ? apiKey.trim() : existing.apiKey,
     };
 
     let status = 'Not Configured';
@@ -289,6 +315,20 @@ app.post('/api/email/config', async (req, res) => {
       status: updated.status,
       warning,
       message: warning ? `Saved with notice: ${warning}` : 'Email provider configuration saved successfully.',
+      hasPassword: !!updated.smtpPass,
+      config: {
+        provider: updated.provider,
+        senderName: updated.senderName,
+        senderEmail: updated.senderEmail,
+        replyTo: updated.replyTo,
+        smtpHost: updated.smtpHost,
+        smtpPort: updated.smtpPort,
+        smtpSecure: updated.smtpSecure,
+        smtpUser: updated.smtpUser,
+        status: updated.status,
+        configured: updated.configured,
+        hasPassword: !!updated.smtpPass,
+      },
     });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err.message || 'Failed to update email config' });

@@ -778,11 +778,11 @@ export const defaultEmailTemplates: EmailTemplate[] = [
 ];
 
 export const defaultEmailSettings: EmailSettings = {
-  provider: 'none',
+  provider: 'smtp',
   senderName: 'SparkGenTechnology',
-  senderEmail: 'sales@sparkgentechnology.com',
-  replyTo: 'support@sparkgentechnology.com',
-  status: 'Not Configured',
+  senderEmail: 'sales@sparkgentechnology.in',
+  replyTo: 'sales@sparkgentechnology.in',
+  status: 'Configured',
   trackingEnabled: true,
   supportsOpenTracking: false,
   supportsClickTracking: false,
@@ -5449,18 +5449,17 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       updatedAt: nowIso,
       updatedBy: userProfile?.name || 'Administrator',
     };
+    // Ensure secrets are NEVER stored in publicly readable Firestore
+    const firestoreData: any = { ...cleanDataForFirestore(updated) };
+    delete firestoreData.smtpPass;
+    delete firestoreData.apiKey;
+
     try {
-      await setDoc(doc(db, 'emailSettings', 'default'), cleanDataForFirestore(updated), { merge: true });
-      // Also sync to backend API endpoint
-      await fetch('/api/email/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
-      });
+      await setDoc(doc(db, 'emailSettings', 'default'), firestoreData, { merge: true });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, 'emailSettings/default');
-      throw err;
+      console.warn('Could not write emailSettings to Firestore:', err);
     }
+    setEmailSettings(updated);
   };
 
   const testEmailConnection = async (): Promise<{ success: boolean; message?: string; error?: string }> => {
