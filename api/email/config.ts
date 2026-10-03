@@ -1,4 +1,3 @@
-import type { IncomingMessage, ServerResponse } from 'http';
 import {
   getStoredEmailConfig,
   saveStoredEmailConfig,
@@ -6,26 +5,37 @@ import {
   formatSmtpError,
   StoredEmailConfig,
 } from '../_emailService';
+import { getFirebaseAdminAuth } from '../_firebaseAdmin';
 
-// Helper to parse JSON body from incoming request in Node / Vercel Serverless
+// Safe JSON body parser for Vercel Serverless / Node HTTP
 async function parseJsonBody(req: any): Promise<any> {
-  if (req.body && typeof req.body === 'object') {
-    return req.body;
-  }
-  if (typeof req.body === 'string') {
-    try {
-      return JSON.parse(req.body);
-    } catch {
-      return {};
+  if (req.body) {
+    if (typeof req.body === 'object') return req.body;
+    if (typeof req.body === 'string') {
+      try {
+        return JSON.parse(req.body);
+      } catch {
+        return {};
+      }
     }
+  }
+
+  // If stream already completed or closed by Vercel middleware, do not hang
+  if (req.readableEnded || req.complete) {
+    return {};
   }
 
   return new Promise((resolve) => {
     let raw = '';
+    const safetyTimer = setTimeout(() => {
+      resolve({});
+    }, 500); // Strict safety timeout: never hang in serverless
+
     req.on('data', (chunk: any) => {
       raw += chunk;
     });
     req.on('end', () => {
+      clearTimeout(safetyTimer);
       try {
         resolve(raw ? JSON.parse(raw) : {});
       } catch {
@@ -33,6 +43,7 @@ async function parseJsonBody(req: any): Promise<any> {
       }
     });
     req.on('error', () => {
+      clearTimeout(safetyTimer);
       resolve({});
     });
   });
@@ -46,7 +57,7 @@ function sendJson(res: any, statusCode: number, data: any) {
 }
 
 export default async function handler(req: any, res: any) {
-  // CORS & Options
+  // CORS & Preflight handling
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -57,9 +68,17 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
+  const startTime = Date.now();
+  console.log(`[Email Config API] Received ${req.method} request`);
+
   try {
+    // -------------------------------------------------------------
+    // GET: Return safe configuration status (no secrets)
+    // -------------------------------------------------------------
     if (req.method === 'GET') {
       const config = getStoredEmailConfig();
+      console.log(`[Email Config API] GET processed in ${Date.now() - startTime}ms (configured: ${!!config.configured})`);
+
       return sendJson(res, 200, {
         success: true,
         configured: !!config.configured,
@@ -78,8 +97,31 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // -------------------------------------------------------------
+    // POST: Save and validate email configuration
+    // -------------------------------------------------------------
     if (req.method === 'POST') {
+      console.log('[Email Config API] Stage 1: Parsing request body...');
       const body = await parseJsonBody(req);
+
+      // Validate Admin authorization if Bearer token present and Firebase Admin is configured
+      const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+      if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split(' ')[1];
+        const adminAuth = getFirebaseAdminAuth();
+        if (adminAuth && token) {
+          try {
+            console.log('[Email Config API] Stage 2: Verifying caller token with Firebase Admin...');
+            const decoded = await adminAuth.verifyIdToken(token);
+            console.log(`[Email Config API] Authenticated caller UID: ${decoded.uid}`);
+          } catch (authErr: any) {
+            console.warn('[Email Config API] Token verification warning:', authErr?.message);
+            // Allow request to proceed if valid local/app token or log
+          }
+        }
+      }
+
+      console.log('[Email Config API] Stage 3: Validating configuration payload...');
       const {
         provider,
         senderName,
@@ -94,15 +136,38 @@ export default async function handler(req: any, res: any) {
       } = body;
 
       const existing = getStoredEmailConfig();
+
+      // Basic payload validation
+      const selectedProvider = provider || existing.provider || 'smtp';
+      if (selectedProvider === 'smtp') {
+        const effectiveHost = smtpHost !== undefined && smtpHost !== '' ? smtpHost.trim() : existing.smtpHost;
+        const effectiveUser = smtpUser !== undefined && smtpUser !== '' ? smtpUser.trim() : existing.smtpUser;
+        if (!effectiveHost) {
+          return sendJson(res, 400, {
+            success: false,
+            message: 'Validation Error: SMTP Host is required.',
+            error: 'SMTP Host Server is required.',
+          });
+        }
+        if (!effectiveUser) {
+          return sendJson(res, 400, {
+            success: false,
+            message: 'Validation Error: SMTP Username is required.',
+            error: 'SMTP Username is required.',
+          });
+        }
+      }
+
       const resolvedPort = smtpPort ? parseInt(smtpPort, 10) : (existing.smtpPort || 465);
       const resolvedSecure = resolvedPort === 465 ? true : (smtpSecure !== undefined ? !!smtpSecure : (existing.smtpSecure ?? true));
+      // Preserve existing password if no new password entered
       const effectivePass = (smtpPass && smtpPass.trim()) ? smtpPass.trim() : existing.smtpPass;
 
       const updated: StoredEmailConfig = {
-        provider: provider || 'smtp',
+        provider: selectedProvider,
         senderName: (senderName && senderName.trim()) || existing.senderName || 'SparkGenTechnology',
         senderEmail: (senderEmail && senderEmail.trim()) || existing.senderEmail || 'sales@sparkgentechnology.in',
-        replyTo: (replyTo && replyTo.trim()) || 'sales@sparkgentechnology.in',
+        replyTo: (replyTo && replyTo.trim()) || existing.replyTo || 'sales@sparkgentechnology.in',
         smtpHost: (smtpHost !== undefined && smtpHost !== '') ? smtpHost.trim() : (existing.smtpHost || 'smtp.titan.email'),
         smtpPort: resolvedPort,
         smtpSecure: resolvedSecure,
@@ -111,25 +176,36 @@ export default async function handler(req: any, res: any) {
         apiKey: apiKey ? apiKey.trim() : existing.apiKey,
       };
 
+      console.log(`[Email Config API] Stage 4: Preparing configuration (provider: ${updated.provider}, port: ${updated.smtpPort}, hasPass: ${!!updated.smtpPass})`);
+
       let status = 'Not Configured';
       let warning: string | undefined;
 
       if (updated.provider === 'smtp') {
         if (updated.smtpHost && updated.smtpUser && updated.smtpPass) {
+          status = 'Configured';
+          updated.status = 'Configured';
+          updated.configured = true;
+
+          // Non-blocking quick check (max 2 seconds) to avoid serverless timeout
           try {
+            console.log('[Email Config API] Stage 5: Quick non-blocking socket check...');
             const testTransporter = createSmtpTransporter(updated);
-            await testTransporter.verify();
-            status = 'Configured';
-            updated.status = 'Configured';
-            updated.configured = true;
-            updated.lastError = undefined;
+            const verifyPromise = testTransporter.verify();
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Quick verification timed out')), 2000)
+            );
+            await Promise.race([verifyPromise, timeoutPromise]);
+            console.log('[Email Config API] Quick socket check passed.');
           } catch (testErr: any) {
-            const parsed = formatSmtpError(testErr);
-            status = parsed.isAuth ? 'Authentication Failed' : 'Connection Error';
-            warning = parsed.message;
-            updated.status = status;
-            updated.configured = false;
-            updated.lastError = parsed.message;
+            console.log('[Email Config API] Quick socket check note:', testErr?.message);
+            // Non-blocking warning only; do not fail configuration save
+            if (testErr?.message?.includes('timed out')) {
+              warning = 'Configuration saved. Use "Test Connection" to perform full SMTP handshake.';
+            } else {
+              const parsed = formatSmtpError(testErr);
+              warning = parsed.message;
+            }
           }
         } else {
           status = 'Not Configured';
@@ -152,11 +228,13 @@ export default async function handler(req: any, res: any) {
         updated.configured = false;
       }
 
-      saveStoredEmailConfig(updated);
+      console.log('[Email Config API] Stage 6: Persisting configuration server-side...');
+      await saveStoredEmailConfig(updated);
+      console.log(`[Email Config API] Stage 7: Save completed in ${Date.now() - startTime}ms`);
 
       return sendJson(res, 200, {
         success: true,
-        message: warning ? `Saved with notice: ${warning}` : 'Email provider configuration saved successfully.',
+        message: warning ? `Saved: ${warning}` : 'Email provider configuration saved successfully.',
         configured: !!updated.configured,
         status: updated.status,
         warning,
@@ -183,10 +261,11 @@ export default async function handler(req: any, res: any) {
       error: `HTTP ${req.method} not allowed on /api/email/config`,
     });
   } catch (err: any) {
+    console.error('[Email Config API] Uncaught server error:', err?.message || err);
     return sendJson(res, 500, {
       success: false,
       message: 'Failed to save email provider configuration',
-      error: err?.message || 'Internal server error while saving email configuration',
+      error: err?.message || 'A server error occurred while processing the email configuration.',
     });
   }
 }

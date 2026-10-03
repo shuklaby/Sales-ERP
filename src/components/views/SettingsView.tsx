@@ -113,7 +113,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     updateProductSettings,
   } = useCrmData();
 
-  const { isAdmin, userProfile } = useAuth();
+  const { isAdmin, userProfile, currentUser } = useAuth();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'company');
 
@@ -885,9 +885,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         }
       }
 
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (currentUser) {
+        try {
+          const idToken = await currentUser.getIdToken();
+          if (idToken) headers['Authorization'] = `Bearer ${idToken}`;
+        } catch {
+          // Token retrieval optional fallback
+        }
+      }
+
       const res = await fetch('/api/email/config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(payload),
       });
 
@@ -903,11 +913,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
 
       if (!res.ok || !data) {
         const textSnippet = !data ? await res.text().catch(() => '') : '';
-        const cleanSnippet = textSnippet.slice(0, 120).replace(/<[^>]*>?/gm, '').trim();
+        const cleanSnippet = textSnippet.slice(0, 150).replace(/<[^>]*>?/gm, '').trim();
         throw new Error(
           data?.error ||
           data?.message ||
-          `API endpoint /api/email/config returned HTTP ${res.status} (${res.statusText || 'Error'})${cleanSnippet ? `: ${cleanSnippet}` : ''}`
+          (res.status === 500
+            ? `Server Error (500): ${cleanSnippet || 'The email configuration could not be processed by the server.'}`
+            : `API request failed with HTTP ${res.status}${cleanSnippet ? `: ${cleanSnippet}` : ''}`)
         );
       }
 

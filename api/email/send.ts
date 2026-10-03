@@ -5,23 +5,29 @@ import {
 } from '../_emailService';
 
 async function parseJsonBody(req: any): Promise<any> {
-  if (req.body && typeof req.body === 'object') {
-    return req.body;
-  }
-  if (typeof req.body === 'string') {
-    try {
-      return JSON.parse(req.body);
-    } catch {
-      return {};
+  if (req.body) {
+    if (typeof req.body === 'object') return req.body;
+    if (typeof req.body === 'string') {
+      try {
+        return JSON.parse(req.body);
+      } catch {
+        return {};
+      }
     }
+  }
+
+  if (req.readableEnded || req.complete) {
+    return {};
   }
 
   return new Promise((resolve) => {
     let raw = '';
+    const timer = setTimeout(() => resolve({}), 500);
     req.on('data', (chunk: any) => {
       raw += chunk;
     });
     req.on('end', () => {
+      clearTimeout(timer);
       try {
         resolve(raw ? JSON.parse(raw) : {});
       } catch {
@@ -29,6 +35,7 @@ async function parseJsonBody(req: any): Promise<any> {
       }
     });
     req.on('error', () => {
+      clearTimeout(timer);
       resolve({});
     });
   });

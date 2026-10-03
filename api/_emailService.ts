@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import nodemailer, { Transporter } from 'nodemailer';
+import { getFirebaseAdminDb } from './_firebaseAdmin';
 
 export interface StoredEmailConfig {
   provider: 'smtp' | 'resend' | 'sendgrid' | 'none';
@@ -40,13 +41,14 @@ export function getStoredEmailConfig(): StoredEmailConfig {
     cfg = { ...cfg, ...inMemoryEmailConfig };
   }
 
+  // 1. Try reading from filesystem (.email-config.json or /tmp/.email-config.json)
   try {
-    if (fs.existsSync(CONFIG_FILE_PATH)) {
-      const data = fs.readFileSync(CONFIG_FILE_PATH, 'utf-8');
+    if (fs.existsSync(TMP_CONFIG_FILE_PATH)) {
+      const data = fs.readFileSync(TMP_CONFIG_FILE_PATH, 'utf-8');
       const parsed = JSON.parse(data);
       cfg = { ...cfg, ...parsed };
-    } else if (fs.existsSync(TMP_CONFIG_FILE_PATH)) {
-      const data = fs.readFileSync(TMP_CONFIG_FILE_PATH, 'utf-8');
+    } else if (fs.existsSync(CONFIG_FILE_PATH)) {
+      const data = fs.readFileSync(CONFIG_FILE_PATH, 'utf-8');
       const parsed = JSON.parse(data);
       cfg = { ...cfg, ...parsed };
     }
@@ -54,38 +56,36 @@ export function getStoredEmailConfig(): StoredEmailConfig {
     // quiet fallback
   }
 
-  // Fallback to process.env if available (e.g. Vercel Environment Variables)
-  if (cfg.provider === 'none' || !cfg.smtpPass) {
-    const envHost = process.env.SMTP_HOST;
-    const envUser = process.env.SMTP_USER;
-    const envPass = process.env.SMTP_PASSWORD || process.env.SMTP_PASS;
-    const envFrom = process.env.EMAIL_FROM || process.env.SMTP_FROM || envUser;
-    const envFromName = process.env.EMAIL_FROM_NAME || process.env.SMTP_FROM_NAME || 'SparkGenTechnology';
-    const envReplyTo = process.env.EMAIL_REPLY_TO || process.env.SMTP_REPLY_TO || 'sales@sparkgentechnology.in';
-    const envProvider = (process.env.EMAIL_PROVIDER as any) || (envHost ? 'smtp' : cfg.provider);
+  // 2. Fallback to process.env if available (e.g. Vercel Environment Variables)
+  const envHost = process.env.SMTP_HOST;
+  const envUser = process.env.SMTP_USER;
+  const envPass = process.env.SMTP_PASSWORD || process.env.SMTP_PASS;
+  const envFrom = process.env.EMAIL_FROM || process.env.SMTP_FROM || envUser;
+  const envFromName = process.env.EMAIL_FROM_NAME || process.env.SMTP_FROM_NAME || 'SparkGenTechnology';
+  const envReplyTo = process.env.EMAIL_REPLY_TO || process.env.SMTP_REPLY_TO || 'sales@sparkgentechnology.in';
+  const envProvider = (process.env.EMAIL_PROVIDER as any) || (envHost ? 'smtp' : cfg.provider);
 
-    if (envHost && envUser) {
-      cfg = {
-        ...cfg,
-        provider: envProvider,
-        senderName: envFromName,
-        senderEmail: envFrom || 'sales@sparkgentechnology.in',
-        replyTo: envReplyTo,
-        smtpHost: envHost,
-        smtpPort: parseInt(process.env.SMTP_PORT || '465', 10),
-        smtpSecure: process.env.SMTP_SECURE === 'true' || process.env.SMTP_PORT === '465',
-        smtpUser: envUser,
-        smtpPass: envPass || cfg.smtpPass || '',
-      };
-    } else if (process.env.RESEND_API_KEY) {
-      cfg = {
-        ...cfg,
-        provider: 'resend',
-        senderName: process.env.SENDER_NAME || 'SparkGenTechnology',
-        senderEmail: process.env.SENDER_EMAIL || 'sales@sparkgentechnology.in',
-        apiKey: process.env.RESEND_API_KEY,
-      };
-    }
+  if (envHost && envUser) {
+    cfg = {
+      ...cfg,
+      provider: envProvider,
+      senderName: envFromName,
+      senderEmail: envFrom || 'sales@sparkgentechnology.in',
+      replyTo: envReplyTo,
+      smtpHost: envHost,
+      smtpPort: parseInt(process.env.SMTP_PORT || '465', 10),
+      smtpSecure: process.env.SMTP_SECURE === 'true' || process.env.SMTP_PORT === '465',
+      smtpUser: envUser,
+      smtpPass: cfg.smtpPass || envPass || '',
+    };
+  } else if (process.env.RESEND_API_KEY) {
+    cfg = {
+      ...cfg,
+      provider: 'resend',
+      senderName: process.env.SENDER_NAME || 'SparkGenTechnology',
+      senderEmail: process.env.SENDER_EMAIL || 'sales@sparkgentechnology.in',
+      apiKey: cfg.apiKey || process.env.RESEND_API_KEY,
+    };
   }
 
   const isHealthy = cfg.status !== 'Authentication Failed';
@@ -101,16 +101,51 @@ export function getStoredEmailConfig(): StoredEmailConfig {
   return cfg;
 }
 
-export function saveStoredEmailConfig(config: StoredEmailConfig) {
+export async function saveStoredEmailConfig(config: StoredEmailConfig): Promise<void> {
   inMemoryEmailConfig = { ...config };
+
+  // Write to writable /tmp directory
+  try {
+    fs.writeFileSync(TMP_CONFIG_FILE_PATH, JSON.stringify(config, null, 2), 'utf-8');
+  } catch (err: any) {
+    console.warn('[Email Storage] Could not write to /tmp file:', err?.message);
+  }
+
+  // Try writing to root directory if writable
   try {
     fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(config, null, 2), 'utf-8');
   } catch {
-    try {
-      fs.writeFileSync(TMP_CONFIG_FILE_PATH, JSON.stringify(config, null, 2), 'utf-8');
-    } catch {
-      // In-memory cache preserved
+    // Read-only filesystem in Vercel lambda - expected
+  }
+
+  // Sync non-secret configuration to Firestore via Firebase Admin if configured
+  try {
+    const adminDb = getFirebaseAdminDb();
+    if (adminDb) {
+      console.log('[Email Storage] Syncing email configuration to Firestore document emailSettings/default...');
+      const firestoreData: Record<string, any> = {
+        provider: config.provider,
+        senderName: config.senderName,
+        senderEmail: config.senderEmail,
+        replyTo: config.replyTo || config.senderEmail,
+        smtpHost: config.smtpHost || null,
+        smtpPort: config.smtpPort || null,
+        smtpSecure: config.smtpSecure ?? null,
+        smtpUser: config.smtpUser || null,
+        status: config.status || 'Configured',
+        configured: !!config.configured,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'Admin via Vercel API',
+      };
+      // Explicitly delete secrets from Firestore payload
+      delete firestoreData.smtpPass;
+      delete firestoreData.apiKey;
+
+      await adminDb.collection('emailSettings').doc('default').set(firestoreData, { merge: true });
+      console.log('[Email Storage] Firestore document emailSettings/default updated successfully.');
     }
+  } catch (dbErr: any) {
+    console.warn('[Email Storage] Could not sync to Firestore via Admin SDK:', dbErr?.message);
   }
 }
 
@@ -131,9 +166,10 @@ export function createSmtpTransporter(config: StoredEmailConfig): Transporter {
       rejectUnauthorized: false,
       minVersion: 'TLSv1.2',
     },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
+    // Keep timeouts short in serverless to prevent FUNCTION_INVOCATION_FAILED
+    connectionTimeout: 5000,
+    greetingTimeout: 5000,
+    socketTimeout: 8000,
   });
 }
 
@@ -152,7 +188,7 @@ export function formatSmtpError(err: any): { isAuth: boolean; message: string } 
   if (errCode === 'ETIMEDOUT' || errCode === 'ETIME' || errMsg.includes('Greeting never received') || errMsg.includes('timeout')) {
     return {
       isAuth: false,
-      message: 'SMTP Connection Timeout: Unable to reach the mail server. Please verify host server and port.',
+      message: 'SMTP Connection Timeout: Unable to reach mail server within timeout window. Host and credentials are saved.',
     };
   }
 

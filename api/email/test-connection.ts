@@ -43,7 +43,11 @@ export default async function handler(req: any, res: any) {
 
       try {
         const transporter = createSmtpTransporter(config);
-        await transporter.verify();
+        const verifyPromise = transporter.verify();
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('SMTP handshake timed out after 5 seconds')), 5000)
+        );
+        await Promise.race([verifyPromise, timeoutPromise]);
         return sendJson(res, 200, {
           success: true,
           message: 'SMTP connection verified successfully.',
