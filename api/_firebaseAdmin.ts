@@ -1,6 +1,9 @@
-import { initializeApp, getApps, getApp, cert, App } from 'firebase-admin/app';
-import { getFirestore, Firestore } from 'firebase-admin/firestore';
-import { getAuth, Auth } from 'firebase-admin/auth';
+import { initializeApp, getApps, getApp, cert } from 'firebase-admin/app';
+import type { App } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+import type { Firestore } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
+import type { Auth } from 'firebase-admin/auth';
 
 let cachedDb: Firestore | null = null;
 let cachedAuth: Auth | null = null;

@@ -2,7 +2,7 @@ import {
   getStoredEmailConfig,
   createSmtpTransporter,
   formatSmtpError,
-} from '../_emailService';
+} from '../_emailService.js';
 
 function sendJson(res: any, statusCode: number, data: any) {
   res.statusCode = statusCode;

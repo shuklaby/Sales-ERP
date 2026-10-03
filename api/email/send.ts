@@ -2,7 +2,7 @@ import {
   getStoredEmailConfig,
   createSmtpTransporter,
   formatSmtpError,
-} from '../_emailService';
+} from '../_emailService.js';
 
 async function parseJsonBody(req: any): Promise<any> {
   if (req.body) {

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import nodemailer, { Transporter } from 'nodemailer';
-import { getFirebaseAdminDb } from './_firebaseAdmin';
+import { getFirebaseAdminDb } from './_firebaseAdmin.js';
 
 export interface StoredEmailConfig {
   provider: 'smtp' | 'resend' | 'sendgrid' | 'none';

@@ -4,8 +4,8 @@ import {
   createSmtpTransporter,
   formatSmtpError,
   StoredEmailConfig,
-} from '../_emailService';
-import { getFirebaseAdminAuth } from '../_firebaseAdmin';
+} from '../_emailService.js';
+import { getFirebaseAdminAuth } from '../_firebaseAdmin.js';
 
 // Safe JSON body parser for Vercel Serverless / Node HTTP
 async function parseJsonBody(req: any): Promise<any> {
