@@ -78,7 +78,11 @@ export const SendProposalEmailModal: React.FC<SendProposalEmailModalProps> = ({
     setBcc('');
 
     // 2. Prepare Template Variables (Section 3)
-    const variables = buildTemplateVariables(proposal, matchedCustomer, null, userProfile);
+    const variables = buildTemplateVariables(proposal, matchedCustomer, null, userProfile, undefined, {
+      officialEmail: emailSettings.senderEmail || emailSettings.officialEmail || emailSettings.fromEmail || emailSettings.smtpUsername || 'sales@sparkgentechnology.in',
+      fromEmail: emailSettings.senderEmail || emailSettings.fromEmail || emailSettings.officialEmail || 'sales@sparkgentechnology.in',
+      companyName: emailSettings.senderName || emailSettings.fromName || 'SparkGenTechnology',
+    });
 
     // 3. Find active Proposal Email template or fallback to default
     const proposalTpl = emailTemplates.find(
@@ -91,9 +95,9 @@ export const SendProposalEmailModal: React.FC<SendProposalEmailModalProps> = ({
       setMessage(interpolateEmailTemplate(proposalTpl.body, variables));
     } else {
       setSelectedTemplateId('');
-      setSubject(`Proposal ${proposal.proposalNumber} from ${variables.companyName || 'SparkGenTechnology'}`);
+      setSubject(`Proposal from SparkGenTechnology - ${proposal.proposalNumber}`);
       setMessage(
-        `Dear ${variables.customerName},\n\nPlease find attached the proposal ${proposal.proposalNumber}.\n\nRegards,\n${variables.companyName || 'SparkGenTechnology'}`
+        `Dear ${variables.customerName},\n\nPlease find attached the proposal from SparkGenTechnology.\n\nProposal No: ${proposal.proposalNumber}\nProposal Date: ${variables.proposalDate}\nTotal Amount: ${variables.totalAmount}\n\nPlease review the attached proposal and feel free to contact us for any clarification.\n\nRegards,\nSparkGenTechnology\n${variables.officialEmail}\n${variables.officialPhone}`
       );
     }
 
@@ -133,7 +137,11 @@ export const SendProposalEmailModal: React.FC<SendProposalEmailModalProps> = ({
     const tpl = emailTemplates.find((t) => t.id === tplId);
     if (!tpl) return;
 
-    const variables = buildTemplateVariables(proposal, matchedCustomer, null, userProfile);
+    const variables = buildTemplateVariables(proposal, matchedCustomer, null, userProfile, undefined, {
+      officialEmail: emailSettings.senderEmail || emailSettings.officialEmail || emailSettings.fromEmail || emailSettings.smtpUsername || 'sales@sparkgentechnology.in',
+      fromEmail: emailSettings.senderEmail || emailSettings.fromEmail || emailSettings.officialEmail || 'sales@sparkgentechnology.in',
+      companyName: emailSettings.senderName || emailSettings.fromName || 'SparkGenTechnology',
+    });
     setSubject(interpolateEmailTemplate(tpl.subject, variables));
     setMessage(interpolateEmailTemplate(tpl.body, variables));
   };

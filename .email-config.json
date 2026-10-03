@@ -1,0 +1,13 @@
+{
+  "provider": "smtp",
+  "senderName": "SparkGenTechnology",
+  "senderEmail": "sales@sparkgentechnology.in",
+  "replyTo": "shukla.by@gmail.com",
+  "smtpHost": "smtp.titan.email",
+  "smtpPort": 465,
+  "smtpSecure": true,
+  "smtpUser": "sales@sparkgentechnology.in",
+  "smtpPass": "Sales@321",
+  "status": "Configured",
+  "configured": true
+}

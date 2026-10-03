@@ -1,7 +1,7 @@
 import express, { Request } from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
-import nodemailer from 'nodemailer';
+import nodemailer, { type Transporter } from 'nodemailer';
 import fs from 'fs';
 import crypto from 'crypto';
 
@@ -49,6 +49,8 @@ interface StoredEmailConfig {
   smtpPass?: string;
   apiKey?: string;
   configured?: boolean;
+  status?: string;
+  lastError?: string;
 }
 
 function getStoredEmailConfig(): StoredEmailConfig {
@@ -99,9 +101,15 @@ function getStoredEmailConfig(): StoredEmailConfig {
     }
   }
 
+  const isHealthy = cfg.status !== 'Authentication Failed';
   cfg.configured =
-    (cfg.provider === 'smtp' && !!cfg.smtpHost && !!cfg.smtpUser) ||
-    ((cfg.provider === 'resend' || cfg.provider === 'sendgrid') && !!cfg.apiKey);
+    isHealthy &&
+    ((cfg.provider === 'smtp' && !!cfg.smtpHost && !!cfg.smtpUser && !!cfg.smtpPass) ||
+    ((cfg.provider === 'resend' || cfg.provider === 'sendgrid') && !!cfg.apiKey));
+
+  if (!cfg.status) {
+    cfg.status = cfg.configured ? 'Configured' : (cfg.provider === 'none' ? 'Not Configured' : 'Not Configured');
+  }
 
   return cfg;
 }
@@ -110,8 +118,69 @@ function saveStoredEmailConfig(config: StoredEmailConfig) {
   try {
     fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(config, null, 2), 'utf-8');
   } catch (e) {
-    console.error('Failed to save email config file:', e);
+    console.warn('Failed to save email config file:', e);
   }
+}
+
+// Centralized SMTP Transporter Builder
+function createSmtpTransporter(config: StoredEmailConfig): Transporter {
+  const port = config.smtpPort ? Number(config.smtpPort) : 587;
+  // Port 465 is dedicated SMTPS (Implicit TLS) and MUST use secure: true to prevent greeting timeouts
+  const isSecure = port === 465 ? true : (config.smtpSecure !== undefined ? !!config.smtpSecure : false);
+
+  return nodemailer.createTransport({
+    host: config.smtpHost || '',
+    port,
+    secure: isSecure,
+    auth: {
+      user: config.smtpUser?.trim() || '',
+      pass: config.smtpPass || '',
+    },
+    tls: {
+      rejectUnauthorized: false,
+      minVersion: 'TLSv1.2',
+    },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
+  });
+}
+
+// Centralized SMTP Error Parser (prevents unhandled 500 exceptions on operational SMTP credential issues)
+function formatSmtpError(err: any): { isAuth: boolean; message: string } {
+  const errMsg = typeof err?.message === 'string' ? err.message : String(err || '');
+  const isAuth =
+    err?.code === 'EAUTH' ||
+    err?.responseCode === 535 ||
+    errMsg.includes('535') ||
+    errMsg.toLowerCase().includes('authentication failed') ||
+    errMsg.toLowerCase().includes('invalid login');
+
+  if (isAuth) {
+    return {
+      isAuth: true,
+      message: 'SMTP Authentication Failed (535): Invalid username or password. Please verify your email credentials in Settings → Email Provider.',
+    };
+  }
+
+  if (err?.code === 'ETIMEDOUT' || errMsg.includes('ETIMEDOUT') || errMsg.includes('timeout')) {
+    return {
+      isAuth: false,
+      message: 'SMTP Connection Timeout: Unable to reach the mail server. Please verify the host server and port.',
+    };
+  }
+
+  if (err?.code === 'ECONNREFUSED' || errMsg.includes('ECONNREFUSED')) {
+    return {
+      isAuth: false,
+      message: 'SMTP Connection Refused: The mail server refused connection on this port. Please check port and SSL settings.',
+    };
+  }
+
+  return {
+    isAuth: false,
+    message: errMsg || 'An error occurred while communicating with the email provider.',
+  };
 }
 
 // -------------------------------------------------------------
@@ -121,25 +190,24 @@ function saveStoredEmailConfig(config: StoredEmailConfig) {
 // 1. Get Email Provider Configuration Status (Safe for Frontend - No Secrets)
 app.get('/api/email/config', (req, res) => {
   const config = getStoredEmailConfig();
-  const isConfigured =
-    (config.provider === 'smtp' && !!config.smtpHost && !!config.smtpUser) ||
-    ((config.provider === 'resend' || config.provider === 'sendgrid') && !!config.apiKey);
 
   res.json({
-    configured: isConfigured,
+    configured: !!config.configured,
     provider: config.provider,
     senderName: config.senderName || 'SparkGenTechnology',
     senderEmail: config.senderEmail || 'sales@sparkgentechnology.com',
     replyTo: config.replyTo || '',
-    status: isConfigured ? 'Configured' : 'Not Configured',
+    status: config.status || (config.configured ? 'Configured' : 'Not Configured'),
+    lastError: config.lastError,
     smtpHost: config.smtpHost ? `${config.smtpHost}` : undefined,
     smtpPort: config.smtpPort,
+    smtpSecure: !!config.smtpSecure,
     smtpUserMasked: config.smtpUser ? `${config.smtpUser.slice(0, 3)}***` : undefined,
   });
 });
 
 // 2. Save Email Configuration (Admin only server-side)
-app.post('/api/email/config', (req, res) => {
+app.post('/api/email/config', async (req, res) => {
   try {
     const {
       provider,
@@ -155,33 +223,75 @@ app.post('/api/email/config', (req, res) => {
     } = req.body;
 
     const existing = getStoredEmailConfig();
+    const resolvedPort = smtpPort ? parseInt(smtpPort, 10) : (existing.smtpPort || 587);
+    const resolvedSecure = resolvedPort === 465 ? true : (smtpSecure !== undefined ? !!smtpSecure : (existing.smtpSecure || false));
+
     const updated: StoredEmailConfig = {
       provider: provider || 'none',
       senderName: senderName || 'SparkGenTechnology',
       senderEmail: senderEmail || 'sales@sparkgentechnology.com',
       replyTo: replyTo || '',
       smtpHost: smtpHost !== undefined ? smtpHost : existing.smtpHost,
-      smtpPort: smtpPort ? parseInt(smtpPort, 10) : existing.smtpPort,
-      smtpSecure: smtpSecure !== undefined ? !!smtpSecure : existing.smtpSecure,
+      smtpPort: resolvedPort,
+      smtpSecure: resolvedSecure,
       smtpUser: smtpUser !== undefined ? smtpUser : existing.smtpUser,
       smtpPass: smtpPass ? smtpPass : existing.smtpPass, // only overwrite if provided
       apiKey: apiKey ? apiKey : existing.apiKey,
     };
 
-    saveStoredEmailConfig(updated);
+    let status = 'Not Configured';
+    let warning: string | undefined;
 
-    const isConfigured =
-      (updated.provider === 'smtp' && !!updated.smtpHost && !!updated.smtpUser) ||
-      ((updated.provider === 'resend' || updated.provider === 'sendgrid') && !!updated.apiKey);
+    // Optional quick background verification if SMTP credentials provided
+    if (updated.provider === 'smtp') {
+      if (updated.smtpHost && updated.smtpUser && updated.smtpPass) {
+        try {
+          const testTransporter = createSmtpTransporter(updated);
+          await testTransporter.verify();
+          status = 'Configured';
+          updated.status = 'Configured';
+          updated.configured = true;
+          updated.lastError = undefined;
+        } catch (testErr: any) {
+          const parsed = formatSmtpError(testErr);
+          status = parsed.isAuth ? 'Authentication Failed' : 'Connection Error';
+          warning = parsed.message;
+          updated.status = status;
+          updated.configured = false;
+          updated.lastError = parsed.message;
+        }
+      } else {
+        status = 'Not Configured';
+        updated.status = status;
+        updated.configured = false;
+      }
+    } else if (updated.provider === 'resend' || updated.provider === 'sendgrid') {
+      if (updated.apiKey) {
+        status = 'Configured';
+        updated.status = status;
+        updated.configured = true;
+      } else {
+        status = 'Not Configured';
+        updated.status = status;
+        updated.configured = false;
+      }
+    } else {
+      status = 'Not Configured';
+      updated.status = status;
+      updated.configured = false;
+    }
+
+    saveStoredEmailConfig(updated);
 
     res.json({
       success: true,
-      configured: isConfigured,
-      status: isConfigured ? 'Configured' : 'Not Configured',
-      message: 'Email provider configuration saved successfully.',
+      configured: !!updated.configured,
+      status: updated.status,
+      warning,
+      message: warning ? `Saved with notice: ${warning}` : 'Email provider configuration saved successfully.',
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message || 'Failed to update email config' });
+    res.status(400).json({ success: false, error: err.message || 'Failed to update email config' });
   }
 });
 
@@ -190,25 +300,26 @@ app.post('/api/email/test-connection', async (req, res) => {
   const config = getStoredEmailConfig();
 
   if (config.provider === 'smtp') {
-    if (!config.smtpHost || !config.smtpUser) {
-      return res.status(400).json({ success: false, error: 'SMTP host and username are not configured.' });
+    if (!config.smtpHost || !config.smtpUser || !config.smtpPass) {
+      return res.status(400).json({ success: false, error: 'SMTP host, username, and password are required.' });
     }
     try {
-      const transporter = nodemailer.createTransport({
-        host: config.smtpHost,
-        port: config.smtpPort || 587,
-        secure: config.smtpSecure || false,
-        auth: {
-          user: config.smtpUser,
-          pass: config.smtpPass || '',
-        },
-        connectionTimeout: 8000,
-      });
-
+      const transporter = createSmtpTransporter(config);
       await transporter.verify();
+      config.status = 'Configured';
+      config.configured = true;
+      config.lastError = undefined;
+      saveStoredEmailConfig(config);
       return res.json({ success: true, message: 'SMTP connection verified successfully.' });
     } catch (err: any) {
-      return res.status(400).json({ success: false, error: `SMTP verification failed: ${err.message}` });
+      const parsed = formatSmtpError(err);
+      if (parsed.isAuth) {
+        config.status = 'Authentication Failed';
+        config.configured = false;
+        config.lastError = parsed.message;
+        saveStoredEmailConfig(config);
+      }
+      return res.json({ success: false, error: parsed.message });
     }
   } else if (config.provider === 'resend' || config.provider === 'sendgrid') {
     if (!config.apiKey) {
@@ -256,18 +367,19 @@ app.post('/api/email/send', async (req, res) => {
     }
 
     const config = getStoredEmailConfig();
-    const isConfigured =
-      (config.provider === 'smtp' && !!config.smtpHost && !!config.smtpUser) ||
-      ((config.provider === 'resend' || config.provider === 'sendgrid') && !!config.apiKey);
+    const isConfigured = !!config.configured;
 
     // Section 4 requirement:
     // If an email provider is not configured: Show "Email Service Not Configured". Do not pretend that an email was sent.
-    if (!isConfigured) {
+    if (!isConfigured || config.status === 'Authentication Failed') {
+      const errMsg = config.status === 'Authentication Failed'
+        ? `Email Provider Authentication Failed: Invalid credentials. Please check your username and password in Settings → Email Provider.`
+        : 'Email Service Not Configured. Please configure SMTP or Email Provider credentials in Admin Settings.';
       return res.status(400).json({
         success: false,
         status: 'Failed',
-        errorCode: 'SERVICE_NOT_CONFIGURED',
-        error: 'Email Service Not Configured. Please configure SMTP or Email Provider credentials in Admin Settings.',
+        errorCode: config.status === 'Authentication Failed' ? 'SMTP_AUTH_FAILED' : 'SERVICE_NOT_CONFIGURED',
+        error: errMsg,
       });
     }
 
@@ -298,15 +410,7 @@ app.post('/api/email/send', async (req, res) => {
 
     // 1. Dispatch via SMTP
     if (config.provider === 'smtp') {
-      const transporter = nodemailer.createTransport({
-        host: config.smtpHost,
-        port: config.smtpPort || 587,
-        secure: config.smtpSecure || false,
-        auth: {
-          user: config.smtpUser,
-          pass: config.smtpPass || '',
-        },
-      });
+      const transporter = createSmtpTransporter(config);
 
       const mailOptions: any = {
         from: sender,
@@ -378,11 +482,19 @@ app.post('/api/email/send', async (req, res) => {
       error: `Unsupported email provider: ${config.provider}`,
     });
   } catch (err: any) {
-    console.error('Server email send error:', err);
-    return res.status(500).json({
+    const parsed = formatSmtpError(err);
+    if (parsed.isAuth) {
+      const cfg = getStoredEmailConfig();
+      cfg.status = 'Authentication Failed';
+      cfg.configured = false;
+      cfg.lastError = parsed.message;
+      saveStoredEmailConfig(cfg);
+    }
+    return res.status(400).json({
       success: false,
       status: 'Failed',
-      error: err.message || 'An unexpected error occurred while communicating with email provider.',
+      errorCode: parsed.isAuth ? 'SMTP_AUTH_FAILED' : 'DELIVERY_FAILED',
+      error: parsed.message,
     });
   }
 });
@@ -1600,16 +1712,8 @@ app.post('/api/customer/invite', async (req, res) => {
           </div>
         `;
 
-        if (emailConfig.provider === 'smtp') {
-          const transporter = nodemailer.createTransport({
-            host: emailConfig.smtpHost,
-            port: emailConfig.smtpPort || 587,
-            secure: emailConfig.smtpSecure || false,
-            auth: {
-              user: emailConfig.smtpUser,
-              pass: emailConfig.smtpPass || '',
-            },
-          });
+        if (emailConfig.configured && emailConfig.status !== 'Authentication Failed' && emailConfig.provider === 'smtp') {
+          const transporter = createSmtpTransporter(emailConfig);
 
           await transporter.sendMail({
             from: `${emailConfig.senderName || 'SparkGenTechnology'} <${emailConfig.senderEmail || 'sales@sparkgentechnology.com'}>`,
@@ -1621,7 +1725,6 @@ app.post('/api/customer/invite', async (req, res) => {
           emailSent = true;
         }
       } catch (mailErr: any) {
-        console.warn('Could not dispatch invitation email automatically:', mailErr);
         emailError = mailErr.message || 'Email delivery failed';
       }
     }
@@ -1747,16 +1850,8 @@ app.post('/api/customer/ticket-notify', async (req, res) => {
         const emailSubject = `[Ticket ${ticketNumber}] Update: ${subject} — SparkGenTechnology`;
         const emailText = `Hello,\n\nThere is an update on Support Ticket ${ticketNumber} (${subject}).\n\nEvent: ${eventType}\nCustomer: ${customerName}\n\nMessage:\n${message}\n\nPlease check your Customer Portal or CRM Dashboard to view the complete thread.\n\nSparkGenTechnology Support`;
 
-        if (emailConfig.provider === 'smtp') {
-          const transporter = nodemailer.createTransport({
-            host: emailConfig.smtpHost,
-            port: emailConfig.smtpPort || 587,
-            secure: emailConfig.smtpSecure || false,
-            auth: {
-              user: emailConfig.smtpUser,
-              pass: emailConfig.smtpPass || '',
-            },
-          });
+        if (emailConfig.configured && emailConfig.status !== 'Authentication Failed' && emailConfig.provider === 'smtp') {
+          const transporter = createSmtpTransporter(emailConfig);
 
           await transporter.sendMail({
             from: `${emailConfig.senderName || 'SparkGenTechnology'} <${emailConfig.senderEmail || 'support@sparkgentechnology.com'}>`,
@@ -1765,8 +1860,8 @@ app.post('/api/customer/ticket-notify', async (req, res) => {
             text: emailText,
           });
         }
-      } catch (e) {
-        console.warn('Ticket notification email failed:', e);
+      } catch {
+        // quiet catch for non-blocking ticket update email
       }
     }
 
@@ -1939,16 +2034,16 @@ app.post('/api/communication/send-email', async (req, res) => {
     }
 
     const emailConfig = getStoredEmailConfig();
-    const isConfigured =
-      (emailConfig.provider === 'smtp' && !!emailConfig.smtpHost && !!emailConfig.smtpUser) ||
-      ((emailConfig.provider === 'resend' || emailConfig.provider === 'sendgrid') && !!emailConfig.apiKey);
+    const isConfigured = !!emailConfig.configured;
 
-    if (!isConfigured) {
+    if (!isConfigured || emailConfig.status === 'Authentication Failed') {
       return res.status(400).json({
         success: false,
         status: 'Failed',
-        errorCategory: 'PROVIDER_NOT_CONFIGURED',
-        error: 'Email Service Not Configured. Please configure SMTP or Transactional API credentials in Admin Settings.',
+        errorCategory: emailConfig.status === 'Authentication Failed' ? 'AUTHENTICATION_ERROR' : 'PROVIDER_NOT_CONFIGURED',
+        error: emailConfig.status === 'Authentication Failed'
+          ? 'Email Provider Authentication Failed: Invalid credentials.'
+          : 'Email Service Not Configured. Please configure SMTP or Transactional API credentials in Admin Settings.',
       });
     }
 
@@ -2012,16 +2107,7 @@ app.post('/api/communication/send-email', async (req, res) => {
     let providerMessageId = '';
 
     if (emailConfig.provider === 'smtp') {
-      const transporter = nodemailer.createTransport({
-        host: emailConfig.smtpHost,
-        port: emailConfig.smtpPort || 587,
-        secure: emailConfig.smtpSecure || false,
-        auth: {
-          user: emailConfig.smtpUser,
-          pass: emailConfig.smtpPass || '',
-        },
-        connectionTimeout: 10000,
-      });
+      const transporter = createSmtpTransporter(emailConfig);
 
       const mailOptions: any = {
         from: fromAddress,
@@ -2122,12 +2208,12 @@ app.post('/api/communication/send-email', async (req, res) => {
 
     return res.json(finalResponse);
   } catch (err: any) {
-    console.error('Email send failed:', err);
-    return res.status(500).json({
+    const parsed = formatSmtpError(err);
+    return res.status(400).json({
       success: false,
       status: 'Failed',
-      errorCategory: 'DELIVERY_ERROR',
-      error: err.message || 'Email delivery failed.',
+      errorCategory: parsed.isAuth ? 'AUTHENTICATION_ERROR' : 'DELIVERY_ERROR',
+      error: parsed.message,
     });
   }
 });
@@ -2340,14 +2426,8 @@ app.post('/api/communication/process-scheduled', async (req, res) => {
         try {
           if (msg.type === 'EMAIL') {
             const emailConfig = getStoredEmailConfig();
-            if (emailConfig.configured) {
-              const transporter = nodemailer.createTransport({
-                host: emailConfig.smtpHost,
-                port: emailConfig.smtpPort || 587,
-                secure: emailConfig.smtpSecure || false,
-                auth: { user: emailConfig.smtpUser, pass: emailConfig.smtpPass || '' },
-                connectionTimeout: 8000,
-              });
+            if (emailConfig.configured && emailConfig.status !== 'Authentication Failed' && emailConfig.provider === 'smtp') {
+              const transporter = createSmtpTransporter(emailConfig);
               await transporter.sendMail({
                 from: `"${emailConfig.senderName || 'SparkGenTechnology'}" <${emailConfig.senderEmail || 'sales@sparkgentechnology.com'}>`,
                 to: msg.recipient,
@@ -2359,7 +2439,9 @@ app.post('/api/communication/process-scheduled', async (req, res) => {
               processedCount++;
             } else {
               msg.status = 'Failed';
-              msg.errorMessage = 'Email service not configured.';
+              msg.errorMessage = emailConfig.status === 'Authentication Failed'
+                ? 'Email provider authentication failed.'
+                : 'Email service not configured.';
             }
           } else {
             msg.status = 'Sent';
@@ -2453,20 +2535,16 @@ app.post('/api/communication/retry', async (req, res) => {
     const { communicationId, recipient, subject, body } = req.body;
     const emailConfig = getStoredEmailConfig();
 
-    if (!emailConfig.configured) {
+    if (!emailConfig.configured || emailConfig.status === 'Authentication Failed') {
       return res.status(400).json({
         success: false,
-        error: 'Email Service is not configured. Please configure email settings before retrying.',
+        error: emailConfig.status === 'Authentication Failed'
+          ? 'Email Provider Authentication Failed. Please check SMTP credentials in Settings.'
+          : 'Email Service is not configured. Please configure email settings before retrying.',
       });
     }
 
-    const transporter = nodemailer.createTransport({
-      host: emailConfig.smtpHost,
-      port: emailConfig.smtpPort || 587,
-      secure: emailConfig.smtpSecure || false,
-      auth: { user: emailConfig.smtpUser, pass: emailConfig.smtpPass || '' },
-      connectionTimeout: 8000,
-    });
+    const transporter = createSmtpTransporter(emailConfig);
 
     const info = await transporter.sendMail({
       from: `"${emailConfig.senderName || 'SparkGenTechnology'}" <${emailConfig.senderEmail || 'sales@sparkgentechnology.com'}>`,
@@ -2483,10 +2561,11 @@ app.post('/api/communication/retry', async (req, res) => {
       message: 'Retry succeeded.',
     });
   } catch (e: any) {
-    res.status(500).json({
+    const parsed = formatSmtpError(e);
+    res.status(400).json({
       success: false,
       status: 'Failed',
-      error: `Retry failed: ${e.message}`,
+      error: `Retry failed: ${parsed.message}`,
     });
   }
 });
@@ -2532,14 +2611,8 @@ setInterval(async () => {
         try {
           if (msg.type === 'EMAIL') {
             const emailConfig = getStoredEmailConfig();
-            if (emailConfig.configured && emailConfig.provider === 'smtp') {
-              const transporter = nodemailer.createTransport({
-                host: emailConfig.smtpHost,
-                port: emailConfig.smtpPort || 587,
-                secure: emailConfig.smtpSecure || false,
-                auth: { user: emailConfig.smtpUser, pass: emailConfig.smtpPass || '' },
-                connectionTimeout: 8000,
-              });
+            if (emailConfig.configured && emailConfig.status !== 'Authentication Failed' && emailConfig.provider === 'smtp') {
+              const transporter = createSmtpTransporter(emailConfig);
               await transporter.sendMail({
                 from: `"${emailConfig.senderName || 'SparkGenTechnology'}" <${emailConfig.senderEmail || 'sales@sparkgentechnology.com'}>`,
                 to: msg.recipient,
@@ -2550,15 +2623,18 @@ setInterval(async () => {
               msg.processedAt = new Date().toISOString();
             } else {
               msg.status = 'Failed';
-              msg.errorMessage = 'Email service not configured for scheduled dispatch.';
+              msg.errorMessage = emailConfig.status === 'Authentication Failed'
+                ? 'Email provider authentication failed.'
+                : 'Email service not configured for scheduled dispatch.';
             }
           } else {
             msg.status = 'Sent';
             msg.processedAt = new Date().toISOString();
           }
         } catch (err: any) {
+          const parsed = formatSmtpError(err);
           msg.status = 'Failed';
-          msg.errorMessage = err.message;
+          msg.errorMessage = parsed.message;
         }
       }
     }
@@ -2566,8 +2642,8 @@ setInterval(async () => {
     if (updated) {
       saveStoredCommData(store);
     }
-  } catch (err) {
-    console.warn('Scheduled communication worker tick error:', err);
+  } catch {
+    // quiet catch for scheduled communication worker tick
   }
 }, 60000);
 

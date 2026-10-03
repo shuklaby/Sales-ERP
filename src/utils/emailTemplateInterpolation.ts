@@ -4,12 +4,16 @@ export interface TemplateVariables {
   customerName?: string;
   companyName?: string;
   proposalNumber?: string;
+  proposalDate?: string;
   proposalAmount?: string | number;
+  totalAmount?: string | number;
   proposalLink?: string;
   employeeName?: string;
   contactPerson?: string;
   grandTotal?: string | number;
   validUntil?: string;
+  officialEmail?: string;
+  officialPhone?: string;
   employeePhone?: string;
   employeeEmail?: string;
   secureProposalLink?: string;
@@ -31,6 +35,14 @@ export function sanitizeEmailContent(text: string): string {
 }
 
 /**
+ * Normalizes a key name for fuzzy variable lookup
+ * e.g., "Customer Name" -> "customername"
+ */
+function normalizeKey(k: string): string {
+  return k.toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+/**
  * Extracts and prepares template variables from available CRM objects
  */
 export function buildTemplateVariables(
@@ -38,10 +50,11 @@ export function buildTemplateVariables(
   customer?: Customer | null,
   lead?: Lead | null,
   employee?: UserProfile | null,
-  appUrl?: string
+  appUrl?: string,
+  officialEmailConfig?: { officialEmail?: string; fromEmail?: string; phone?: string; companyName?: string } | null
 ): TemplateVariables {
   // Official company name
-  const officialCompanyName = 'SparkGenTechnology';
+  const officialCompanyName = officialEmailConfig?.companyName || 'SparkGenTechnology';
 
   // Customer name
   const custName =
@@ -54,12 +67,51 @@ export function buildTemplateVariables(
     'Valued Client';
 
   const propNum = proposal?.proposalNumber || '';
-  const total = proposal?.grandTotal !== undefined ? proposal.grandTotal.toLocaleString('en-IN') : '';
-  const validUntil = proposal?.validUntil ? new Date(proposal.validUntil).toLocaleDateString('en-IN') : '';
+  const total =
+    proposal?.grandTotal !== undefined
+      ? `₹${proposal.grandTotal.toLocaleString('en-IN')}`
+      : proposal?.totalAmount !== undefined
+      ? `₹${proposal.totalAmount.toLocaleString('en-IN')}`
+      : '';
 
-  const empName = employee?.name || proposal?.assignedEmployeeName || proposal?.createdByName || 'Administrator';
-  const empPhone = employee?.mobile || '+91 98765 43210';
-  const empEmail = employee?.email || 'sales@sparkgentechnology.com';
+  const propDate = proposal?.proposalDate
+    ? new Date(proposal.proposalDate).toLocaleDateString('en-IN', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      })
+    : proposal?.createdAt
+    ? new Date(proposal.createdAt).toLocaleDateString('en-IN', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      })
+    : new Date().toLocaleDateString('en-IN', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+
+  const validUntil = proposal?.validUntil
+    ? new Date(proposal.validUntil).toLocaleDateString('en-IN', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      })
+    : '';
+
+  const officialEmail =
+    officialEmailConfig?.officialEmail ||
+    officialEmailConfig?.fromEmail ||
+    'sales@sparkgentechnology.com';
+
+  const officialPhone =
+    officialEmailConfig?.phone || '+91 98765 43210';
+
+  const empName =
+    employee?.name || proposal?.assignedEmployeeName || proposal?.createdByName || 'Administrator';
+  const empPhone = employee?.mobile || officialPhone;
+  const empEmail = employee?.email || officialEmail;
 
   const baseUrl = appUrl || (typeof window !== 'undefined' ? window.location.origin : '');
   const token = proposal?.viewToken || proposal?.id || proposal?.proposalNumber;
@@ -69,13 +121,16 @@ export function buildTemplateVariables(
     customerName: custName,
     companyName: officialCompanyName,
     proposalNumber: propNum,
+    proposalDate: propDate,
     proposalAmount: total,
+    totalAmount: total,
     proposalLink,
     employeeName: empName,
-    // Backwards compatible aliases
     contactPerson: custName,
     grandTotal: total,
     validUntil,
+    officialEmail,
+    officialPhone,
     employeePhone: empPhone,
     employeeEmail: empEmail,
     secureProposalLink: proposalLink,
@@ -83,7 +138,7 @@ export function buildTemplateVariables(
 }
 
 /**
- * Replaces {{variable}} placeholders with real values.
+ * Replaces {{variable}} or {Variable Name} placeholders with real values.
  * Never inserts "undefined" or "null".
  * Strips dangerous HTML/script injection.
  */
@@ -92,11 +147,21 @@ export function interpolateEmailTemplate(templateText: string, variables: Templa
 
   const sanitized = sanitizeEmailContent(templateText);
 
-  return sanitized.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
-    const val = variables[key];
-    if (val === undefined || val === null) {
-      return '';
+  // Build normalized lookup map
+  const normalizedMap = new Map<string, string | number>();
+  for (const [key, value] of Object.entries(variables)) {
+    if (value !== undefined && value !== null) {
+      normalizedMap.set(normalizeKey(key), value);
     }
-    return sanitizeEmailContent(String(val));
+  }
+
+  // Matches either {{key}} or {key}
+  return sanitized.replace(/\{{1,2}\s*([^}]+?)\s*\}{1,2}/g, (match, rawKey) => {
+    const norm = normalizeKey(rawKey.trim());
+    if (normalizedMap.has(norm)) {
+      return sanitizeEmailContent(String(normalizedMap.get(norm)));
+    }
+    // Return original match if variable not known
+    return match;
   });
 }

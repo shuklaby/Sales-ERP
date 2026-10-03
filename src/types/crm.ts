@@ -1167,8 +1167,12 @@ export interface EmailSettings {
   provider: 'smtp' | 'resend' | 'sendgrid' | 'postmark' | 'mailgun' | 'none';
   senderName: string;
   senderEmail: string;
+  fromName?: string;
+  fromEmail?: string;
+  officialEmail?: string;
+  smtpUsername?: string;
   replyTo?: string;
-  status: 'Configured' | 'Not Configured' | 'Connection Error';
+  status: 'Configured' | 'Not Configured' | 'Connection Error' | 'Authentication Failed';
   trackingEnabled?: boolean;
   supportsOpenTracking?: boolean;
   supportsClickTracking?: boolean;

@@ -139,7 +139,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const [smtpPass, setSmtpPass] = useState('');
   const [providerApiKey, setProviderApiKey] = useState('');
   const [isEmailConfigured, setIsEmailConfigured] = useState(false);
-  const [emailConfigStatus, setEmailConfigStatus] = useState<'Configured' | 'Not Configured' | 'Connection Error'>('Not Configured');
+  const [emailConfigStatus, setEmailConfigStatus] = useState<'Configured' | 'Not Configured' | 'Connection Error' | 'Authentication Failed'>('Not Configured');
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionTestResult, setConnectionTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [testEmailRecipient, setTestEmailRecipient] = useState('');
@@ -285,6 +285,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           setEmailConfigStatus(cfg.status || (cfg.configured ? 'Configured' : 'Not Configured'));
           if (cfg.smtpHost) setSmtpHost(cfg.smtpHost);
           if (cfg.smtpPort) setSmtpPort(cfg.smtpPort);
+          if (cfg.smtpSecure !== undefined) {
+            setSmtpSecure(!!cfg.smtpSecure);
+          } else if (cfg.smtpPort === 465) {
+            setSmtpSecure(true);
+          }
+          if (cfg.status === 'Authentication Failed' && cfg.lastError) {
+            setConnectionTestResult({ success: false, message: cfg.lastError });
+          } else if (cfg.status === 'Configured') {
+            setConnectionTestResult({ success: true, message: 'SMTP connection verified successfully.' });
+          }
         }
       })
       .catch((e) => console.warn('Could not fetch email config:', e));
@@ -847,12 +857,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         senderName: emailSenderName.trim(),
         senderEmail: emailSenderAddress.trim(),
         replyTo: emailReplyTo.trim(),
-        status: data.configured ? 'Configured' : 'Not Configured',
+        status: data.status || (data.configured ? 'Configured' : 'Not Configured'),
       });
 
       setIsEmailConfigured(data.configured);
       setEmailConfigStatus(data.status);
-      notifySuccess('Email provider configuration successfully saved server-side!');
+      if (data.warning) {
+        setConnectionTestResult({
+          success: false,
+          message: data.warning,
+        });
+        setErrorMsg(data.warning);
+      } else {
+        setConnectionTestResult(null);
+        notifySuccess('Email provider configuration successfully saved server-side!');
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Error saving email provider configuration');
     } finally {
@@ -869,8 +888,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         setConnectionTestResult({ success: true, message: res.message || 'Connection verified successfully!' });
         setEmailConfigStatus('Configured');
       } else {
+        const isAuth = res.error?.includes('Authentication Failed') || res.error?.includes('535');
         setConnectionTestResult({ success: false, message: res.error || 'Connection failed' });
-        setEmailConfigStatus('Connection Error');
+        setEmailConfigStatus(isAuth ? 'Authentication Failed' : 'Connection Error');
       }
     } catch (err: any) {
       setConnectionTestResult({ success: false, message: err.message || 'Network error' });
@@ -2489,7 +2509,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                   className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${
                     emailConfigStatus === 'Configured'
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : emailConfigStatus === 'Connection Error'
+                      : emailConfigStatus === 'Connection Error' || emailConfigStatus === 'Authentication Failed'
                       ? 'bg-rose-50 text-rose-700 border-rose-200'
                       : 'bg-amber-50 text-amber-700 border-amber-200'
                   }`}
@@ -2631,7 +2651,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                       type="number"
                       required
                       value={smtpPort}
-                      onChange={(e) => setSmtpPort(Number(e.target.value))}
+                      onChange={(e) => {
+                        const portNum = Number(e.target.value);
+                        setSmtpPort(portNum);
+                        if (portNum === 465) {
+                          setSmtpSecure(true);
+                        } else if (portNum === 587 || portNum === 25) {
+                          setSmtpSecure(false);
+                        }
+                      }}
                       placeholder="587 or 465"
                       className="w-full text-xs font-mono border border-slate-300 rounded-xl px-3.5 py-2.5 bg-white"
                     />
@@ -2664,7 +2692,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                     />
                   </div>
 
-                  <div className="sm:col-span-3">
+                  <div className="sm:col-span-3 space-y-2">
                     <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700">
                       <input
                         type="checkbox"
@@ -2672,8 +2700,45 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                         onChange={(e) => setSmtpSecure(e.target.checked)}
                         className="w-4 h-4 text-indigo-600 rounded"
                       />
-                      <span>Enforce SSL/TLS Encryption (Port 465) — Uncheck for STARTTLS (Port 587)</span>
+                      <span>Enforce SSL/TLS Encryption (Required for Port 465) — Uncheck for STARTTLS (Port 587)</span>
                     </label>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-slate-500">
+                      <span className="font-semibold text-slate-600">Quick Presets:</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSmtpHost('smtp.titan.email');
+                          setSmtpPort(465);
+                          setSmtpSecure(true);
+                        }}
+                        className="px-2 py-0.5 bg-white border border-slate-200 rounded-md hover:bg-slate-100 text-slate-700 font-medium transition-colors"
+                      >
+                        Titan Email (Port 465 SSL)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSmtpHost('smtp.gmail.com');
+                          setSmtpPort(587);
+                          setSmtpSecure(false);
+                        }}
+                        className="px-2 py-0.5 bg-white border border-slate-200 rounded-md hover:bg-slate-100 text-slate-700 font-medium transition-colors"
+                      >
+                        Google Workspace / Gmail (587 TLS)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSmtpHost('smtp.office365.com');
+                          setSmtpPort(587);
+                          setSmtpSecure(false);
+                        }}
+                        className="px-2 py-0.5 bg-white border border-slate-200 rounded-md hover:bg-slate-100 text-slate-700 font-medium transition-colors"
+                      >
+                        Microsoft 365 (587 TLS)
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
