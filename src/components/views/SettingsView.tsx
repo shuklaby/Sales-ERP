@@ -277,7 +277,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   // Fetch safe server-side email configuration status
   useEffect(() => {
     fetch('/api/email/config')
-      .then((r) => r.json())
+      .then(async (r) => {
+        const contentType = r.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          try {
+            return await r.json();
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      })
       .then((cfg) => {
         if (cfg) {
           setEmailProvider(cfg.provider || 'smtp');
@@ -881,9 +891,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Server rejected email provider configuration');
+      const contentType = res.headers.get('content-type') || '';
+      let data: any = null;
+      if (contentType.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+      }
+
+      if (!res.ok || !data) {
+        const textSnippet = !data ? await res.text().catch(() => '') : '';
+        const cleanSnippet = textSnippet.slice(0, 120).replace(/<[^>]*>?/gm, '').trim();
+        throw new Error(
+          data?.error ||
+          data?.message ||
+          `API endpoint /api/email/config returned HTTP ${res.status} (${res.statusText || 'Error'})${cleanSnippet ? `: ${cleanSnippet}` : ''}`
+        );
+      }
+
+      if (!data.success) {
+        throw new Error(data.error || data.message || 'Server rejected email provider configuration');
       }
 
       // Sync non-secret configuration to Firestore and CRM context (passwords are NEVER written to Firestore)
@@ -966,8 +995,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           body: `Hello,\n\nThis is a test email sent from SparkGenTechnology CRM.\n\nProvider: ${emailProvider}\nSender: ${emailSenderName} <${emailSenderAddress}>\nDispatched At: ${new Date().toISOString()}\n\nIf you received this message, your secure email transmission pipeline is completely operational.`,
         }),
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
+
+      const contentType = res.headers.get('content-type') || '';
+      let data: any = null;
+      if (contentType.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+      }
+
+      if (!res.ok || !data) {
+        const textSnippet = !data ? await res.text().catch(() => '') : '';
+        const cleanSnippet = textSnippet.slice(0, 100).replace(/<[^>]*>?/gm, '').trim();
+        throw new Error(
+          data?.error ||
+          data?.message ||
+          `API endpoint /api/email/send returned HTTP ${res.status}${cleanSnippet ? `: ${cleanSnippet}` : ''}`
+        );
+      }
+
+      if (data.success) {
         setTestEmailResult({
           success: true,
           message: 'Test email sent successfully.',

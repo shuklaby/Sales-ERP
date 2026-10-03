@@ -5465,8 +5465,16 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const testEmailConnection = async (): Promise<{ success: boolean; message?: string; error?: string }> => {
     try {
       const res = await fetch('/api/email/test-connection', { method: 'POST' });
-      const data = await res.json();
-      return data;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        return await res.json();
+      }
+      const text = await res.text().catch(() => '');
+      const cleanSnippet = text.slice(0, 100).replace(/<[^>]*>?/gm, '').trim();
+      return {
+        success: false,
+        error: `Endpoint returned HTTP ${res.status}${cleanSnippet ? `: ${cleanSnippet}` : ''}`,
+      };
     } catch (err: any) {
       return { success: false, error: err.message || 'Failed to connect to email service' };
     }
@@ -5513,7 +5521,23 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }),
       });
 
-      const resData = await response.json();
+      const contentType = response.headers.get('content-type') || '';
+      let resData: any = null;
+      if (contentType.includes('application/json')) {
+        try {
+          resData = await response.json();
+        } catch {
+          resData = null;
+        }
+      }
+      if (!resData) {
+        const text = await response.text().catch(() => '');
+        const cleanSnippet = text.slice(0, 100).replace(/<[^>]*>?/gm, '').trim();
+        resData = {
+          success: false,
+          error: `Endpoint returned HTTP ${response.status}${cleanSnippet ? `: ${cleanSnippet}` : ''}`,
+        };
+      }
 
       if (resData.success && resData.status === 'Sent') {
         const sentRecord: EmailRecord = {
