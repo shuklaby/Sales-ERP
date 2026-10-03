@@ -5465,12 +5465,17 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const testEmailConnection = async (): Promise<{ success: boolean; message?: string; error?: string }> => {
     try {
       const res = await fetch('/api/email/test-connection', { method: 'POST' });
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        return await res.json();
+      const rawText = await res.text().catch(() => '');
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = null;
       }
-      const text = await res.text().catch(() => '');
-      const cleanSnippet = text.slice(0, 100).replace(/<[^>]*>?/gm, '').trim();
+      if (data && typeof data === 'object') {
+        return data;
+      }
+      const cleanSnippet = rawText.slice(0, 100).replace(/<[^>]*>?/gm, '').trim();
       return {
         success: false,
         error: `Endpoint returned HTTP ${res.status}${cleanSnippet ? `: ${cleanSnippet}` : ''}`,
@@ -5521,18 +5526,15 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }),
       });
 
-      const contentType = response.headers.get('content-type') || '';
+      const rawText = await response.text().catch(() => '');
       let resData: any = null;
-      if (contentType.includes('application/json')) {
-        try {
-          resData = await response.json();
-        } catch {
-          resData = null;
-        }
+      try {
+        resData = JSON.parse(rawText);
+      } catch {
+        resData = null;
       }
       if (!resData) {
-        const text = await response.text().catch(() => '');
-        const cleanSnippet = text.slice(0, 100).replace(/<[^>]*>?/gm, '').trim();
+        const cleanSnippet = rawText.slice(0, 100).replace(/<[^>]*>?/gm, '').trim();
         resData = {
           success: false,
           error: `Endpoint returned HTTP ${response.status}${cleanSnippet ? `: ${cleanSnippet}` : ''}`,

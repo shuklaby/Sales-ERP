@@ -278,15 +278,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   useEffect(() => {
     fetch('/api/email/config')
       .then(async (r) => {
-        const contentType = r.headers.get('content-type') || '';
-        if (contentType.includes('application/json')) {
-          try {
-            return await r.json();
-          } catch {
-            return null;
-          }
+        const raw = await r.text().catch(() => '');
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
         }
-        return null;
       })
       .then((cfg) => {
         if (cfg) {
@@ -901,19 +898,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         body: JSON.stringify(payload),
       });
 
-      const contentType = res.headers.get('content-type') || '';
+      const rawText = await res.text().catch(() => '');
       let data: any = null;
-      if (contentType.includes('application/json')) {
-        try {
-          data = await res.json();
-        } catch {
-          data = null;
-        }
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = null;
       }
 
       if (!res.ok || !data) {
-        const textSnippet = !data ? await res.text().catch(() => '') : '';
-        const cleanSnippet = textSnippet.slice(0, 150).replace(/<[^>]*>?/gm, '').trim();
+        const cleanSnippet = rawText.slice(0, 150).replace(/<[^>]*>?/gm, '').trim();
         throw new Error(
           data?.error ||
           data?.message ||
@@ -1008,19 +1002,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         }),
       });
 
-      const contentType = res.headers.get('content-type') || '';
+      const rawText = await res.text().catch(() => '');
       let data: any = null;
-      if (contentType.includes('application/json')) {
-        try {
-          data = await res.json();
-        } catch {
-          data = null;
-        }
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = null;
       }
 
       if (!res.ok || !data) {
-        const textSnippet = !data ? await res.text().catch(() => '') : '';
-        const cleanSnippet = textSnippet.slice(0, 100).replace(/<[^>]*>?/gm, '').trim();
+        const cleanSnippet = rawText.slice(0, 100).replace(/<[^>]*>?/gm, '').trim();
         throw new Error(
           data?.error ||
           data?.message ||
