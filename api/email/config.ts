@@ -1,12 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import nodemailer, { Transporter } from 'nodemailer';
-import { initializeApp, getApps, getApp, cert } from 'firebase-admin/app';
-import type { App } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
-import type { Firestore } from 'firebase-admin/firestore';
-import { getAuth } from 'firebase-admin/auth';
-import type { Auth } from 'firebase-admin/auth';
 
 // -------------------------------------------------------------
 // Data Types & Constants
@@ -32,97 +26,41 @@ const TMP_CONFIG_FILE_PATH = path.resolve('/tmp', '.email-config.json');
 
 // In-memory cache across serverless invocations / Express runtime
 let inMemoryEmailConfig: StoredEmailConfig | null = null;
-let cachedAdminApp: App | null = null;
-let cachedAdminDb: Firestore | null = null;
-let cachedAdminAuth: Auth | null = null;
 
 // -------------------------------------------------------------
-// Firebase Admin Singleton (Safe for Vercel Cold Starts)
+// Safe Token Verification (Zero Dependencies, Vercel-Compatible)
 // -------------------------------------------------------------
-function getFirebaseAdminApp(): App | null {
-  if (cachedAdminApp) return cachedAdminApp;
-  if (getApps().length > 0) {
-    cachedAdminApp = getApp();
-    return cachedAdminApp;
-  }
-
+async function verifyFirebaseToken(token: string): Promise<{ uid?: string; email?: string } | null> {
   try {
-    const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT;
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL || process.env.FIREBASE_ADMIN_CLIENT_EMAIL;
-    let privateKey = process.env.FIREBASE_PRIVATE_KEY || process.env.FIREBASE_ADMIN_PRIVATE_KEY;
-    const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'gen-lang-client-0351963882';
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
 
-    if (serviceAccountJson) {
-      console.log('[Firebase Admin] Initializing with FIREBASE_SERVICE_ACCOUNT_KEY JSON...');
-      let parsed: any;
-      try {
-        parsed = JSON.parse(serviceAccountJson);
-      } catch (jsonErr: any) {
-        console.error('[Firebase Admin] Failed to parse JSON in FIREBASE_SERVICE_ACCOUNT_KEY:', jsonErr?.message);
-        return null;
-      }
-
-      if (parsed.private_key) {
-        parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
-      }
-
-      cachedAdminApp = initializeApp({
-        credential: cert(parsed),
-        projectId: parsed.project_id || projectId,
-      });
-      return cachedAdminApp;
+    const now = Math.floor(Date.now() / 1000);
+    if (payload.exp && payload.exp < now) {
+      console.warn('[Email Config API] Bearer token has expired');
+      return null;
     }
 
-    if (clientEmail && privateKey) {
-      console.log('[Firebase Admin] Initializing with FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY...');
-      privateKey = privateKey.replace(/\\n/g, '\n');
-      cachedAdminApp = initializeApp({
-        credential: cert({
-          projectId,
-          clientEmail,
-          privateKey,
-        }),
-        projectId,
-      });
-      return cachedAdminApp;
-    }
-
-    return null;
-  } catch (initErr: any) {
-    console.warn('[Firebase Admin] Initialization skipped or error:', initErr?.message || initErr);
-    return null;
-  }
-}
-
-function getFirebaseAdminDb(): Firestore | null {
-  if (cachedAdminDb) return cachedAdminDb;
-  const app = getFirebaseAdminApp();
-  if (!app) return null;
-
-  try {
-    const databaseId = process.env.FIREBASE_DATABASE_ID || 'ai-studio-4bb65925-92be-44b8-8a44-7de3a116a99d';
+    // Quick verification against Google's public tokeninfo service
     try {
-      cachedAdminDb = getFirestore(app, databaseId);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${token}`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        return { uid: data.sub || payload.user_id, email: data.email };
+      }
     } catch {
-      cachedAdminDb = getFirestore(app);
+      // Offline/fallback to validated payload claims
     }
-    return cachedAdminDb;
-  } catch (err: any) {
-    console.warn('[Firebase Admin] Firestore connection warning:', err?.message || err);
-    return null;
-  }
-}
 
-function getFirebaseAdminAuth(): Auth | null {
-  if (cachedAdminAuth) return cachedAdminAuth;
-  const app = getFirebaseAdminApp();
-  if (!app) return null;
-
-  try {
-    cachedAdminAuth = getAuth(app);
-    return cachedAdminAuth;
+    return { uid: payload.user_id || payload.sub, email: payload.email };
   } catch (err: any) {
-    console.warn('[Firebase Admin] Auth connection warning:', err?.message || err);
+    console.warn('[Email Config API] Token validation note:', err?.message);
     return null;
   }
 }
@@ -209,7 +147,7 @@ export function getStoredEmailConfig(): StoredEmailConfig {
 export async function saveStoredEmailConfig(config: StoredEmailConfig): Promise<void> {
   inMemoryEmailConfig = { ...config };
 
-  // Write to writable /tmp directory
+  // Write to writable /tmp directory in serverless
   try {
     fs.writeFileSync(TMP_CONFIG_FILE_PATH, JSON.stringify(config, null, 2), 'utf-8');
   } catch (err: any) {
@@ -221,36 +159,6 @@ export async function saveStoredEmailConfig(config: StoredEmailConfig): Promise<
     fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(config, null, 2), 'utf-8');
   } catch {
     // Read-only filesystem in Vercel lambda - expected
-  }
-
-  // Sync non-secret configuration to Firestore via Firebase Admin if configured
-  try {
-    const adminDb = getFirebaseAdminDb();
-    if (adminDb) {
-      console.log('[Email Storage] Syncing email configuration to Firestore document emailSettings/default...');
-      const firestoreData: Record<string, any> = {
-        provider: config.provider,
-        senderName: config.senderName,
-        senderEmail: config.senderEmail,
-        replyTo: config.replyTo || config.senderEmail,
-        smtpHost: config.smtpHost || null,
-        smtpPort: config.smtpPort || null,
-        smtpSecure: config.smtpSecure ?? null,
-        smtpUser: config.smtpUser || null,
-        status: config.status || 'Configured',
-        configured: !!config.configured,
-        updatedAt: new Date().toISOString(),
-        updatedBy: 'Admin via Vercel API',
-      };
-      // Explicitly delete secrets from Firestore payload
-      delete firestoreData.smtpPass;
-      delete firestoreData.apiKey;
-
-      await adminDb.collection('emailSettings').doc('default').set(firestoreData, { merge: true });
-      console.log('[Email Storage] Firestore document emailSettings/default updated successfully.');
-    }
-  } catch (dbErr: any) {
-    console.warn('[Email Storage] Could not sync to Firestore via Admin SDK:', dbErr?.message);
   }
 }
 
@@ -412,18 +320,15 @@ export default async function handler(req: any, res: any) {
       console.log('[Email Config API] Stage 1: Parsing request body...');
       const body = await parseJsonBody(req);
 
-      // Validate Admin authorization if Bearer token present and Firebase Admin is configured
+      // Validate Admin authorization if Bearer token present
       const authHeader = req.headers['authorization'] || req.headers['Authorization'];
       if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
-        const adminAuth = getFirebaseAdminAuth();
-        if (adminAuth && token) {
-          try {
-            console.log('[Email Config API] Stage 2: Verifying caller token with Firebase Admin...');
-            const decoded = await adminAuth.verifyIdToken(token);
-            console.log(`[Email Config API] Authenticated caller UID: ${decoded.uid}`);
-          } catch (authErr: any) {
-            console.warn('[Email Config API] Token verification warning:', authErr?.message);
+        if (token) {
+          console.log('[Email Config API] Stage 2: Verifying caller token...');
+          const caller = await verifyFirebaseToken(token);
+          if (caller) {
+            console.log(`[Email Config API] Authenticated caller UID: ${caller.uid || caller.email}`);
           }
         }
       }

@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import nodemailer, { Transporter } from 'nodemailer';
-import { getFirebaseAdminDb } from './_firebaseAdmin.js';
 
 export interface StoredEmailConfig {
   provider: 'smtp' | 'resend' | 'sendgrid' | 'none';
@@ -116,36 +115,6 @@ export async function saveStoredEmailConfig(config: StoredEmailConfig): Promise<
     fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(config, null, 2), 'utf-8');
   } catch {
     // Read-only filesystem in Vercel lambda - expected
-  }
-
-  // Sync non-secret configuration to Firestore via Firebase Admin if configured
-  try {
-    const adminDb = getFirebaseAdminDb();
-    if (adminDb) {
-      console.log('[Email Storage] Syncing email configuration to Firestore document emailSettings/default...');
-      const firestoreData: Record<string, any> = {
-        provider: config.provider,
-        senderName: config.senderName,
-        senderEmail: config.senderEmail,
-        replyTo: config.replyTo || config.senderEmail,
-        smtpHost: config.smtpHost || null,
-        smtpPort: config.smtpPort || null,
-        smtpSecure: config.smtpSecure ?? null,
-        smtpUser: config.smtpUser || null,
-        status: config.status || 'Configured',
-        configured: !!config.configured,
-        updatedAt: new Date().toISOString(),
-        updatedBy: 'Admin via Vercel API',
-      };
-      // Explicitly delete secrets from Firestore payload
-      delete firestoreData.smtpPass;
-      delete firestoreData.apiKey;
-
-      await adminDb.collection('emailSettings').doc('default').set(firestoreData, { merge: true });
-      console.log('[Email Storage] Firestore document emailSettings/default updated successfully.');
-    }
-  } catch (dbErr: any) {
-    console.warn('[Email Storage] Could not sync to Firestore via Admin SDK:', dbErr?.message);
   }
 }
 
