@@ -118,8 +118,49 @@ export const Header: React.FC<HeaderProps> = ({
 
   const q = searchQuery.trim().toLowerCase();
 
+  const authorizedCustomers = React.useMemo(() => {
+    if (isAdmin) return customers;
+    return customers.filter(
+      (c) =>
+        c.assignedEmployeeId === userProfile?.uid ||
+        c.assignedEmployeeId === userProfile?.employeeId ||
+        c.createdBy === userProfile?.uid
+    );
+  }, [customers, isAdmin, userProfile]);
+
+  const authorizedLeads = React.useMemo(() => {
+    if (isAdmin) return leads;
+    return leads.filter(
+      (l) =>
+        l.assignedEmployeeId === userProfile?.uid ||
+        l.assignedEmployeeId === userProfile?.employeeId ||
+        l.createdBy === userProfile?.uid
+    );
+  }, [leads, isAdmin, userProfile]);
+
+  const authorizedProposals = React.useMemo(() => {
+    if (isAdmin) return proposals;
+    return proposals.filter(
+      (p) =>
+        p.assignedEmployeeId === userProfile?.uid ||
+        p.assignedEmployeeId === userProfile?.employeeId ||
+        p.createdBy === userProfile?.uid
+    );
+  }, [proposals, isAdmin, userProfile]);
+
+  const authorizedSts = React.useMemo(() => {
+    if (isAdmin) return stsRecords;
+    return stsRecords.filter(
+      (s) =>
+        s.assignedEmployeeId === userProfile?.uid ||
+        s.assignedEmployeeId === userProfile?.employeeId ||
+        s.employeeId === userProfile?.uid ||
+        (s as any).createdBy === userProfile?.uid
+    );
+  }, [stsRecords, isAdmin, userProfile]);
+
   const filteredCustomers = q
-    ? customers.filter(
+    ? authorizedCustomers.filter(
         (c) =>
           c.companyName.toLowerCase().includes(q) ||
           c.contactPerson.toLowerCase().includes(q) ||
@@ -131,7 +172,7 @@ export const Header: React.FC<HeaderProps> = ({
     : [];
 
   const filteredLeads = q
-    ? leads.filter(
+    ? authorizedLeads.filter(
         (l) =>
           l.companyName.toLowerCase().includes(q) ||
           l.contactPerson.toLowerCase().includes(q) ||
@@ -142,7 +183,7 @@ export const Header: React.FC<HeaderProps> = ({
     : [];
 
   const filteredProposals = q
-    ? proposals.filter(
+    ? authorizedProposals.filter(
         (p) =>
           p.proposalNumber.toLowerCase().includes(q) ||
           p.customerName.toLowerCase().includes(q)
@@ -150,7 +191,7 @@ export const Header: React.FC<HeaderProps> = ({
     : [];
 
   const filteredSts = q
-    ? stsRecords.filter(
+    ? authorizedSts.filter(
         (s) =>
           s.stsNumber.toLowerCase().includes(q) ||
           s.companyName.toLowerCase().includes(q) ||
@@ -522,29 +563,36 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
 
-        {/* Role Switcher Pill */}
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
-          <button
-            onClick={() => switchActiveRole('admin')}
-            className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-              isAdmin
-                ? 'bg-white text-slate-900 shadow-2xs font-semibold'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            Admin View
-          </button>
-          <button
-            onClick={() => switchActiveRole('employee')}
-            className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-              !isAdmin
-                ? 'bg-white text-slate-900 shadow-2xs font-semibold'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            Employee View
-          </button>
-        </div>
+        {/* Role Control: Super Admins can toggle preview, Employees see their badge */}
+        {userProfile?.role === 'admin' ? (
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+            <button
+              onClick={() => switchActiveRole('admin')}
+              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                isAdmin
+                  ? 'bg-white text-slate-900 shadow-2xs font-semibold'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Admin View
+            </button>
+            <button
+              onClick={() => switchActiveRole('employee')}
+              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                !isAdmin
+                  ? 'bg-white text-slate-900 shadow-2xs font-semibold'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Employee View
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
+            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <span className="font-semibold text-slate-700">Employee Workspace</span>
+          </div>
+        )}
 
         {/* User Info / Logout */}
         <div className="flex items-center gap-2 pl-2 border-l border-slate-200">

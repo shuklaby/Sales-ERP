@@ -62,13 +62,16 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   const [isEmailOpen, setIsEmailOpen] = useState(false);
 
   const permittedLeads = useMemo(() => {
-    if (isAdmin || hasPermission('canViewAllCustomers')) {
+    if (isAdmin) {
       return leads;
     }
     return leads.filter(
-      (l) => l.assignedEmployeeId === userProfile?.uid || l.createdBy === userProfile?.uid
+      (l) =>
+        l.assignedEmployeeId === userProfile?.uid ||
+        l.assignedEmployeeId === userProfile?.employeeId ||
+        l.createdBy === userProfile?.uid
     );
-  }, [leads, isAdmin, hasPermission, userProfile]);
+  }, [leads, isAdmin, userProfile]);
 
   const leadSources = useMemo(() => {
     const set = new Set<string>();

@@ -21,6 +21,37 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+// -------------------------------------------------------------
+// BACKEND ROLE-BASED ACCESS CONTROL (RBAC) FOR ADMIN ENDPOINTS
+// -------------------------------------------------------------
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const userRole = (req.headers['x-user-role'] as string || '').toLowerCase();
+  
+  // If an employee calls an admin endpoint, immediately reject with 403 Forbidden
+  if (userRole === 'employee') {
+    return res.status(403).json({
+      success: false,
+      error: 'Access Denied: Super Administrator privileges are required to perform this action.',
+    });
+  }
+
+  next();
+}
+
+// Protect all direct admin routes against unauthorized employee requests
+app.use((req, res, next) => {
+  const pathname = req.path.toLowerCase();
+  const userRole = (req.headers['x-user-role'] as string || '').toLowerCase();
+
+  if (pathname.startsWith('/admin') && userRole === 'employee') {
+    return res.status(403).json({
+      success: false,
+      error: 'Access Denied: Super Administrator privileges are required to access admin routes.',
+    });
+  }
+  next();
+});
+
 // Server-side persistent storage for email config (no secrets sent to frontend)
 const CONFIG_FILE_PATH = path.resolve(process.cwd(), '.email-config.json');
 const TMP_CONFIG_FILE_PATH = path.resolve('/tmp', '.email-config.json');
@@ -232,7 +263,7 @@ app.get('/api/email/config', (req, res) => {
 });
 
 // 2. Save Email Configuration (Admin only server-side)
-app.post('/api/email/config', async (req, res) => {
+app.post('/api/email/config', requireAdmin, async (req, res) => {
   try {
     const {
       provider,
@@ -336,7 +367,7 @@ app.post('/api/email/config', async (req, res) => {
 });
 
 // 3. Test Email Provider Connection
-app.post('/api/email/test-connection', async (req, res) => {
+app.post('/api/email/test-connection', requireAdmin, async (req, res) => {
   const config = getStoredEmailConfig();
 
   if (config.provider === 'smtp') {
@@ -547,10 +578,14 @@ const PAYMENT_CONFIG_FILE = path.resolve(process.cwd(), '.payment-config.json');
 const PAYMENT_DATA_FILE = path.resolve(process.cwd(), '.payment-data.json');
 
 interface StoredPaymentConfig {
-  gateway: 'razorpay' | 'stripe' | 'other';
+  gateway: 'razorpay' | 'cashfree' | 'stripe' | 'other';
   environment: 'Test' | 'Live';
   merchantName: string;
   currency: string;
+  // Cashfree credentials (server-side only)
+  cashfreeAppId?: string;
+  cashfreeSecretKey?: string;
+  cashfreeEnvironment?: 'Sandbox' | 'Production' | 'Test' | 'Live';
   // Razorpay credentials (server-side only)
   razorpayKeyId?: string;
   razorpayKeySecret?: string;
@@ -592,10 +627,13 @@ function getStoredPaymentConfig(): StoredPaymentConfig {
 
   // Fallback to env or defaults
   return {
-    gateway: (process.env.PAYMENT_GATEWAY as any) || 'razorpay',
+    gateway: (process.env.PAYMENT_GATEWAY as any) || 'cashfree',
     environment: (process.env.PAYMENT_ENV as any) || 'Test',
     merchantName: process.env.MERCHANT_NAME || 'SparkGenTechnology',
     currency: process.env.PAYMENT_CURRENCY || 'INR',
+    cashfreeAppId: process.env.CASHFREE_APP_ID || process.env.CASHFREE_CLIENT_ID || '',
+    cashfreeSecretKey: process.env.CASHFREE_SECRET_KEY || process.env.CASHFREE_CLIENT_SECRET || '',
+    cashfreeEnvironment: (process.env.CASHFREE_ENV?.toUpperCase() === 'PROD' ? 'Production' : 'Sandbox') as any,
     razorpayKeyId: process.env.RAZORPAY_KEY_ID || '',
     razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || '',
     razorpayWebhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || '',
@@ -647,14 +685,17 @@ function saveStoredPaymentData(data: StoredPaymentData) {
 }
 
 // 1. Get Safe Public Payment Configuration (No Secrets Returned)
-app.get('/api/payment/config', (req, res) => {
+app.get('/api/payment/config', requireAdmin, (req, res) => {
   const config = getStoredPaymentConfig();
+  const isCashfreeConfigured = !!config.cashfreeAppId && !!config.cashfreeSecretKey;
   const isRazorpayConfigured = !!config.razorpayKeyId && !!config.razorpayKeySecret;
   const isStripeConfigured = !!config.stripePublishableKey && !!config.stripeSecretKey;
   const isOtherConfigured = !!config.otherApiKey && !!config.otherApiSecret;
 
   const isConfigured =
-    config.gateway === 'razorpay'
+    config.gateway === 'cashfree'
+      ? isCashfreeConfigured
+      : config.gateway === 'razorpay'
       ? isRazorpayConfigured
       : config.gateway === 'stripe'
       ? isStripeConfigured
@@ -676,6 +717,10 @@ app.get('/api/payment/config', (req, res) => {
     ? `${publicKey.slice(0, 8)}...${publicKey.slice(-4)}`
     : undefined;
 
+  const cashfreeAppIdMasked = config.cashfreeAppId
+    ? `${config.cashfreeAppId.slice(0, 6)}...${config.cashfreeAppId.slice(-4)}`
+    : undefined;
+
   const origin = `${req.protocol}://${req.get('host')}`;
 
   res.json({
@@ -687,7 +732,10 @@ app.get('/api/payment/config', (req, res) => {
     status,
     publicKey: publicKey || '',
     publicKeyMasked,
-    webhookUrl: `${origin}/api/payment/webhook`,
+    cashfreeAppIdMasked,
+    cashfreeEnvironment: config.cashfreeEnvironment || (config.environment === 'Live' ? 'Production' : 'Sandbox'),
+    hasCashfreeSecret: !!config.cashfreeSecretKey,
+    webhookUrl: `${origin}/api/payment/cashfree/webhook`,
     enabledMethods: config.enabledMethods || {
       upi: true,
       cards: true,
@@ -698,13 +746,16 @@ app.get('/api/payment/config', (req, res) => {
 });
 
 // 2. Save Payment Gateway Credentials (Admin Only Server-Side)
-app.post('/api/payment/config', (req, res) => {
+app.post('/api/payment/config', requireAdmin, (req, res) => {
   try {
     const {
       gateway,
       environment,
       merchantName,
       currency,
+      cashfreeAppId,
+      cashfreeSecretKey,
+      cashfreeEnvironment,
       razorpayKeyId,
       razorpayKeySecret,
       razorpayWebhookSecret,
@@ -720,10 +771,13 @@ app.post('/api/payment/config', (req, res) => {
 
     const existing = getStoredPaymentConfig();
     const updated: StoredPaymentConfig = {
-      gateway: gateway || existing.gateway || 'razorpay',
+      gateway: gateway || existing.gateway || 'cashfree',
       environment: environment || existing.environment || 'Test',
       merchantName: merchantName || existing.merchantName || 'SparkGenTechnology',
       currency: currency || existing.currency || 'INR',
+      cashfreeAppId: cashfreeAppId !== undefined ? cashfreeAppId.trim() : existing.cashfreeAppId,
+      cashfreeSecretKey: (cashfreeSecretKey && cashfreeSecretKey.trim()) ? cashfreeSecretKey.trim() : existing.cashfreeSecretKey,
+      cashfreeEnvironment: cashfreeEnvironment || (environment === 'Live' ? 'Production' : 'Sandbox'),
       razorpayKeyId: razorpayKeyId !== undefined ? razorpayKeyId : existing.razorpayKeyId,
       razorpayKeySecret: razorpayKeySecret !== undefined && razorpayKeySecret !== '' ? razorpayKeySecret : existing.razorpayKeySecret,
       razorpayWebhookSecret: razorpayWebhookSecret !== undefined && razorpayWebhookSecret !== '' ? razorpayWebhookSecret : existing.razorpayWebhookSecret,
@@ -739,11 +793,14 @@ app.post('/api/payment/config', (req, res) => {
 
     saveStoredPaymentConfig(updated);
 
+    const isCashfreeConfigured = !!updated.cashfreeAppId && !!updated.cashfreeSecretKey;
     const isRazorpayConfigured = !!updated.razorpayKeyId && !!updated.razorpayKeySecret;
     const isStripeConfigured = !!updated.stripePublishableKey && !!updated.stripeSecretKey;
     const isOtherConfigured = !!updated.otherApiKey && !!updated.otherApiSecret;
     const isConfigured =
-      updated.gateway === 'razorpay'
+      updated.gateway === 'cashfree'
+        ? isCashfreeConfigured
+        : updated.gateway === 'razorpay'
         ? isRazorpayConfigured
         : updated.gateway === 'stripe'
         ? isStripeConfigured
@@ -761,10 +818,61 @@ app.post('/api/payment/config', (req, res) => {
 });
 
 // 3. Test Payment Gateway Connection
-app.post('/api/payment/test-connection', async (req, res) => {
+app.post('/api/payment/test-connection', requireAdmin, async (req, res) => {
   const config = getStoredPaymentConfig();
 
-  if (config.gateway === 'razorpay') {
+  if (config.gateway === 'cashfree') {
+    const appId = config.cashfreeAppId;
+    const secretKey = config.cashfreeSecretKey;
+    const isProd = config.cashfreeEnvironment === 'Production' || config.environment === 'Live';
+
+    if (!appId || !secretKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cashfree Client ID and Client Secret are required to test connection.',
+      });
+    }
+
+    try {
+      const baseUrl = isProd ? 'https://api.cashfree.com/pg' : 'https://sandbox.cashfree.com/pg';
+      const cfRes = await fetch(`${baseUrl}/orders?limit=1`, {
+        method: 'GET',
+        headers: {
+          'x-client-id': appId,
+          'x-client-secret': secretKey,
+          'x-api-version': '2023-08-01',
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (cfRes.status === 401 || cfRes.status === 403) {
+        const errData: any = await cfRes.json().catch(() => ({}));
+        return res.status(400).json({
+          success: false,
+          error: `Cashfree Authentication Failed: ${errData.message || 'Invalid Client ID or Secret for ' + (isProd ? 'Production' : 'Sandbox') + ' mode.'}`,
+        });
+      }
+
+      if (cfRes.ok || cfRes.status === 200 || cfRes.status === 404) {
+        return res.json({
+          success: true,
+          message: `Cashfree ${isProd ? 'Production' : 'Sandbox'} connection verified successfully.`,
+          mode: isProd ? 'Production' : 'Sandbox',
+        });
+      }
+
+      const errData: any = await cfRes.json().catch(() => ({}));
+      return res.status(400).json({
+        success: false,
+        error: errData.message || `Cashfree returned HTTP ${cfRes.status}`,
+      });
+    } catch (err: any) {
+      return res.status(400).json({
+        success: false,
+        error: `Could not reach Cashfree API: ${err.message}`,
+      });
+    }
+  } else if (config.gateway === 'razorpay') {
     if (!config.razorpayKeyId || !config.razorpayKeySecret) {
       return res.status(400).json({
         success: false,
@@ -834,6 +942,246 @@ app.post('/api/payment/test-connection', async (req, res) => {
     success: true,
     message: `Payment gateway credentials stored for ${config.gateway.toUpperCase()}.`,
   });
+});
+
+// =========================================================================
+// CASHFREE PAYMENT GATEWAY INTEGRATION ENDPOINTS
+// =========================================================================
+
+// A. Create Cashfree Order for Approved Proposal
+app.post('/api/payment/cashfree/create-order', async (req, res) => {
+  try {
+    const { proposalId, proposalNumber, verifiedAmount, customerDetails, proposalData } = req.body;
+
+    if (!proposalId && !proposalNumber) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing proposal identifier. proposalId or proposalNumber is required.',
+      });
+    }
+
+    // Security check: Only allow payment for approved / accepted proposals
+    if (proposalData) {
+      const status = (proposalData.status || '').toLowerCase();
+      const isApproved = status === 'accepted' || status === 'approved';
+      if (!isApproved) {
+        return res.status(403).json({
+          success: false,
+          error: 'Security Violation: Payment is only permitted for Approved proposals. Please approve the proposal first.',
+        });
+      }
+
+      if (proposalData.paymentStatus === 'Paid') {
+        return res.status(400).json({
+          success: false,
+          error: 'Payment Completed: This proposal has already been paid in full.',
+        });
+      }
+    }
+
+    const config = getStoredPaymentConfig();
+    const appId = config.cashfreeAppId;
+    const secretKey = config.cashfreeSecretKey;
+    const isProd = config.cashfreeEnvironment === 'Production' || config.environment === 'Live';
+
+    if (!appId || !secretKey) {
+      return res.status(500).json({
+        success: false,
+        error: 'Cashfree Payment Gateway is not configured. Please enter and save Cashfree credentials in Settings.',
+      });
+    }
+
+    const rawAmount = proposalData?.grandTotal || verifiedAmount;
+    const orderAmount = parseFloat(Number(rawAmount).toFixed(2));
+    if (!orderAmount || isNaN(orderAmount) || orderAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid proposal payment amount.',
+      });
+    }
+
+    const propNum = proposalData?.proposalNumber || proposalNumber || 'PROP';
+    const cleanPropNum = propNum.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const orderId = `cf_ord_${cleanPropNum}_${Date.now()}`.slice(0, 45);
+
+    let rawPhone = customerDetails?.phone || proposalData?.customerMobile || '9876543210';
+    let cleanPhone = rawPhone.replace(/\D/g, '');
+    if (cleanPhone.length > 10) cleanPhone = cleanPhone.slice(-10);
+    if (cleanPhone.length < 10) cleanPhone = '9876543210';
+
+    const customerName = (customerDetails?.name || proposalData?.customerName || 'Valued Customer').slice(0, 50);
+    const customerEmail = customerDetails?.email || proposalData?.customerEmail || 'sales@sparkgentechnology.in';
+    const customerId = (proposalData?.customerId || `cust_${Date.now()}`).slice(0, 40);
+
+    const baseUrl = isProd ? 'https://api.cashfree.com/pg' : 'https://sandbox.cashfree.com/pg';
+    const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
+    const returnUrl = `${origin}/proposal/${proposalData?.viewToken || proposalId}?cf_order_id={order_id}`;
+
+    const cashfreePayload = {
+      order_id: orderId,
+      order_amount: orderAmount,
+      order_currency: 'INR',
+      customer_details: {
+        customer_id: customerId,
+        customer_name: customerName,
+        customer_email: customerEmail,
+        customer_phone: cleanPhone,
+      },
+      order_meta: {
+        return_url: returnUrl,
+      },
+      order_note: `Payment for Commercial Proposal ${propNum}`,
+    };
+
+    console.log(`[Express Cashfree] Creating order ${orderId} for ₹${orderAmount} on ${baseUrl}`);
+
+    const cfResponse = await fetch(`${baseUrl}/orders`, {
+      method: 'POST',
+      headers: {
+        'x-client-id': appId,
+        'x-client-secret': secretKey,
+        'x-api-version': '2023-08-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(cashfreePayload),
+    });
+
+    const cfData: any = await cfResponse.json().catch(() => ({}));
+
+    if (!cfResponse.ok || !cfData.payment_session_id) {
+      console.error('[Express Cashfree] Order creation error:', cfResponse.status, cfData);
+      return res.status(cfResponse.status || 500).json({
+        success: false,
+        error: cfData.message || 'Failed to initialize Cashfree payment session.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      paymentSessionId: cfData.payment_session_id,
+      orderId: cfData.order_id,
+      amount: orderAmount,
+      currency: 'INR',
+      environment: isProd ? 'production' : 'sandbox',
+      cfOrderId: cfData.cf_order_id,
+    });
+  } catch (err: any) {
+    console.error('[Express Cashfree] create-order exception:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Server error creating Cashfree order.' });
+  }
+});
+
+// B. Verify Cashfree Payment with Cashfree Server Directly
+const handleCashfreeVerify = async (req: any, res: any) => {
+  try {
+    const orderId = req.query.orderId || req.query.order_id || req.body?.orderId || req.body?.order_id;
+    if (!orderId) {
+      return res.status(400).json({ success: false, error: 'orderId is required for Cashfree verification.' });
+    }
+
+    const config = getStoredPaymentConfig();
+    const appId = config.cashfreeAppId;
+    const secretKey = config.cashfreeSecretKey;
+    const isProd = config.cashfreeEnvironment === 'Production' || config.environment === 'Live';
+
+    if (!appId || !secretKey) {
+      return res.status(500).json({ success: false, error: 'Cashfree credentials not configured.' });
+    }
+
+    const baseUrl = isProd ? 'https://api.cashfree.com/pg' : 'https://sandbox.cashfree.com/pg';
+    console.log(`[Express Cashfree Verify] Inquiring order ${orderId} on ${baseUrl}`);
+
+    const orderRes = await fetch(`${baseUrl}/orders/${orderId}`, {
+      method: 'GET',
+      headers: {
+        'x-client-id': appId,
+        'x-client-secret': secretKey,
+        'x-api-version': '2023-08-01',
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const orderData: any = await orderRes.json().catch(() => ({}));
+    if (!orderRes.ok) {
+      return res.status(orderRes.status).json({
+        success: false,
+        error: orderData.message || 'Could not verify order on Cashfree.',
+      });
+    }
+
+    const orderStatus = (orderData.order_status || '').toUpperCase();
+
+    let paymentId: string = `cf_pay_${orderId}`;
+    let paymentMethod: string = 'online';
+    let paymentTime: string = new Date().toISOString();
+
+    try {
+      const paymentsRes = await fetch(`${baseUrl}/orders/${orderId}/payments`, {
+        method: 'GET',
+        headers: {
+          'x-client-id': appId,
+          'x-client-secret': secretKey,
+          'x-api-version': '2023-08-01',
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (paymentsRes.ok) {
+        const paymentsList: any = await paymentsRes.json();
+        if (Array.isArray(paymentsList) && paymentsList.length > 0) {
+          const successPayment = paymentsList.find((p: any) => p.payment_status === 'SUCCESS') || paymentsList[0];
+          if (successPayment) {
+            paymentId = successPayment.cf_payment_id ? String(successPayment.cf_payment_id) : paymentId;
+            paymentMethod = successPayment.payment_group || successPayment.payment_method || 'online';
+            if (successPayment.payment_completion_time) {
+              paymentTime = new Date(successPayment.payment_completion_time).toISOString();
+            }
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn('[Express Cashfree Verify] Payment details lookup warning:', e?.message);
+    }
+
+    if (orderStatus === 'PAID') {
+      return res.json({
+        success: true,
+        verified: true,
+        status: 'Paid',
+        orderId,
+        cfOrderId: orderData.cf_order_id,
+        paidAmount: orderData.order_amount,
+        currency: orderData.order_currency || 'INR',
+        paymentId,
+        paymentMethod,
+        paymentDate: paymentTime,
+        gateway: 'cashfree',
+        message: 'Payment verified successfully by Cashfree.',
+      });
+    } else {
+      return res.json({
+        success: false,
+        verified: false,
+        status: orderStatus === 'ACTIVE' ? 'Pending' : (orderStatus === 'CANCELLED' ? 'Cancelled' : 'Failed'),
+        orderId,
+        paidAmount: orderData.order_amount,
+        message: `Cashfree order status is ${orderStatus}. Payment has not been captured.`,
+      });
+    }
+  } catch (err: any) {
+    console.error('[Express Cashfree Verify] Exception:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Server error verifying Cashfree payment.' });
+  }
+};
+
+app.post('/api/payment/cashfree/verify', handleCashfreeVerify);
+app.get('/api/payment/cashfree/verify', handleCashfreeVerify);
+
+// C. Cashfree Webhook Handler
+app.post('/api/payment/cashfree/webhook', (req, res) => {
+  const payload = req.body || {};
+  console.log(`[Express Cashfree Webhook] Event: ${payload.type || 'PAYMENT_EVENT'} for order: ${payload.data?.order?.order_id || 'unknown'}`);
+  res.json({ success: true, status: 'OK', receivedAt: new Date().toISOString() });
 });
 
 // 4. Create Payment Link from Invoice (Server Validates Invoice & Outstanding Amount)
@@ -2694,7 +3042,7 @@ setInterval(async () => {
 // -------------------------------------------------------------
 
 // 1. Create Employee Firebase Authentication Account
-app.post('/api/admin/employees/create-account', async (req, res) => {
+app.post('/api/admin/employees/create-account', requireAdmin, async (req, res) => {
   try {
     const { name, email, role, department, designation, password, accountStatus } = req.body;
 
@@ -2811,7 +3159,7 @@ app.post('/api/admin/employees/create-account', async (req, res) => {
 });
 
 // 2. Send Employee Password Reset Email
-app.post('/api/admin/employees/reset-password', async (req, res) => {
+app.post('/api/admin/employees/reset-password', requireAdmin, async (req, res) => {
   try {
     const { email } = req.body;
     if (!email || typeof email !== 'string' || !email.includes('@')) {
@@ -2868,7 +3216,7 @@ app.post('/api/admin/employees/reset-password', async (req, res) => {
 });
 
 // 3. Toggle Employee Account Active / Inactive Status
-app.post('/api/admin/employees/toggle-status', async (req, res) => {
+app.post('/api/admin/employees/toggle-status', requireAdmin, async (req, res) => {
   try {
     const { status, email, uid } = req.body;
     return res.json({

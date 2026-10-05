@@ -67,9 +67,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         emailLower === 'shukla.by@gmail.com' ||
         emailLower === 'admin@sparkgen.com' ||
         emailLower === 'admin@sparkgentechnology.com' ||
-        emailLower === 'admin@salessphere.com' ||
-        emailLower.startsWith('admin@') ||
-        emailLower.includes('admin');
+        emailLower === 'admin@salessphere.com';
 
       if (snap.exists()) {
         const data = snap.data() as UserProfile;
@@ -89,8 +87,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUserProfile(updatedProfile);
           return updatedProfile;
         }
-        setUserProfile(data);
-        return data;
+
+        // Check if user is in admins collection
+        let isConfirmedAdmin = data.role === 'admin';
+        if (isConfirmedAdmin && !isSuperAdminEmail) {
+          try {
+            const adminDoc = await getDoc(doc(db, 'admins', user.uid));
+            if (!adminDoc.exists()) {
+              isConfirmedAdmin = false;
+            }
+          } catch (e) {
+            // keep existing role if admin check fails
+          }
+        }
+
+        const safeProfile: UserProfile = {
+          ...data,
+          role: isConfirmedAdmin ? 'admin' : 'employee',
+        };
+        setUserProfile(safeProfile);
+        return safeProfile;
       } else {
         // If user is a customer user, do not create an employee record
         const custSnap = await getDoc(doc(db, 'customerUsers', user.uid));
@@ -99,23 +115,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return null as any;
         }
 
-        const role: UserRole = isSuperAdminEmail ? 'admin' : 'employee';
+        // Look for matching employee profile in users collection by email
+        let existingUserSnap: UserProfile | null = null;
+        try {
+          const uQuery = query(collection(db, 'users'), where('email', '==', emailLower));
+          const uDocs = await getDocs(uQuery);
+          if (!uDocs.empty) {
+            existingUserSnap = uDocs.docs[0].data() as UserProfile;
+          }
+        } catch (uErr) {
+          console.warn('Error querying users by email:', uErr);
+        }
+
+        // Look for matching record in employees collection by email
+        let matchingEmpRecord: any = null;
+        try {
+          const eQuery = query(collection(db, 'employees'), where('email', '==', emailLower));
+          const eDocs = await getDocs(eQuery);
+          if (!eDocs.empty) {
+            matchingEmpRecord = eDocs.docs[0].data();
+          }
+        } catch (eErr) {
+          console.warn('Error querying employees by email:', eErr);
+        }
+
+        const isExplicitAdmin = isSuperAdminEmail || (existingUserSnap?.role === 'admin' && matchingEmpRecord?.role === 'admin');
+        const role: UserRole = isExplicitAdmin ? 'admin' : 'employee';
+
         const newProfile: UserProfile = {
           id: user.uid,
           uid: user.uid,
           email: user.email || '',
-          name: user.displayName || (user.email ? user.email.split('@')[0] : 'User'),
+          name: matchingEmpRecord?.name || existingUserSnap?.name || user.displayName || (user.email ? user.email.split('@')[0] : 'Employee'),
+          mobile: matchingEmpRecord?.phone || matchingEmpRecord?.mobile || existingUserSnap?.mobile || '',
           role,
-          status: 'active',
-          permissions: role === 'admin' ? ADMIN_PERMISSIONS : DEFAULT_EMPLOYEE_PERMISSIONS,
-          department: role === 'admin' ? 'Executive' : 'Sales',
-          designation: role === 'admin' ? 'Chief Executive / Admin' : 'Sales Executive',
-          employeeId: role === 'admin' ? 'EMP-ADM-001' : `EMP-${Math.floor(1000 + Math.random() * 9000)}`,
-          createdAt: new Date().toISOString(),
+          status: matchingEmpRecord?.status === 'inactive' ? 'inactive' : 'active',
+          permissions: role === 'admin' ? ADMIN_PERMISSIONS : (matchingEmpRecord?.permissions || existingUserSnap?.permissions || DEFAULT_EMPLOYEE_PERMISSIONS),
+          department: matchingEmpRecord?.department || existingUserSnap?.department || (role === 'admin' ? 'Executive' : 'Sales'),
+          designation: matchingEmpRecord?.designation || existingUserSnap?.designation || (role === 'admin' ? 'Chief Executive / Admin' : 'Sales Executive'),
+          employeeId: matchingEmpRecord?.employeeCode || matchingEmpRecord?.employeeId || existingUserSnap?.employeeId || (role === 'admin' ? 'EMP-ADM-001' : `EMP-${Math.floor(1000 + Math.random() * 9000)}`),
+          createdAt: existingUserSnap?.createdAt || new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
 
-        await setDoc(userDocRef, newProfile);
+        await setDoc(userDocRef, newProfile, { merge: true });
         if (role === 'admin') {
           await setDoc(doc(db, 'admins', user.uid), {
             email: user.email,
@@ -592,11 +635,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const switchActiveRole = (role: UserRole) => {
+    // SECURITY GUARD: Only a user whose Firestore role is 'admin' may switch their active role
+    if (userProfile?.role !== 'admin') {
+      return;
+    }
     setActiveRoleOverride(role);
   };
 
-  const effectiveRole = activeRoleOverride || userProfile?.role || 'employee';
-  const isAdmin = effectiveRole === 'admin';
+  // If user profile is not admin, effective role is STRICTLY employee
+  const effectiveRole: UserRole = userProfile?.role === 'admin'
+    ? (activeRoleOverride || 'admin')
+    : 'employee';
+  const isAdmin = effectiveRole === 'admin' && userProfile?.role === 'admin';
   const isDeactivated = userProfile?.status === 'inactive' && !isAdmin;
 
   const hasPermission = (permission: keyof EmployeePermissions): boolean => {
@@ -607,10 +657,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Check direct key
     if (userProfile.permissions?.[permission]) return true;
 
-    // Alias mapping for full backwards compatibility
+    // Alias mapping for backwards compatibility (Note: canViewAllCustomers is strictly NOT aliased to viewCustomers)
     const aliasMap: Partial<Record<keyof EmployeePermissions, keyof EmployeePermissions>> = {
-      canViewAllCustomers: 'viewCustomers',
-      viewCustomers: 'canViewAllCustomers',
       canAddCustomer: 'createCustomer',
       createCustomer: 'canAddCustomer',
       canEditCustomer: 'editCustomer',

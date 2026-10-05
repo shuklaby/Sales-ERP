@@ -55,15 +55,18 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
   const [isWaOpen, setIsWaOpen] = useState(false);
   const [isEmailOpen, setIsEmailOpen] = useState(false);
 
-  // Permission check: if employee cannot view all customers, only show assigned
+  // Role & Permission check: Admin sees all customers, Employee ONLY sees assigned customers
   const permittedCustomers = useMemo(() => {
-    if (isAdmin || hasPermission('canViewAllCustomers')) {
+    if (isAdmin) {
       return customers;
     }
     return customers.filter(
-      (c) => c.assignedEmployeeId === userProfile?.uid || c.createdBy === userProfile?.uid
+      (c) =>
+        c.assignedEmployeeId === userProfile?.uid ||
+        c.assignedEmployeeId === userProfile?.employeeId ||
+        c.createdBy === userProfile?.uid
     );
-  }, [customers, isAdmin, hasPermission, userProfile]);
+  }, [customers, isAdmin, userProfile]);
 
   // Distinct lead sources for filter dropdown
   const leadSources = useMemo(() => {

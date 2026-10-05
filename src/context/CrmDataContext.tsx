@@ -415,6 +415,35 @@ interface CrmDataContextType {
   fetchPaymentConfig: () => Promise<PaymentGatewayPublicConfig>;
   savePaymentConfig: (config: any) => Promise<{ success: boolean; message?: string; error?: string }>;
   testPaymentConnection: () => Promise<{ success: boolean; message?: string; error?: string }>;
+  createCashfreeOrder: (params: {
+    proposalId: string;
+    proposalNumber?: string;
+    verifiedAmount: number;
+    customerDetails?: { name?: string; email?: string; phone?: string };
+    proposalData?: any;
+  }) => Promise<{
+    success: boolean;
+    paymentSessionId?: string;
+    orderId?: string;
+    amount?: number;
+    currency?: string;
+    environment?: string;
+    error?: string;
+  }>;
+  verifyCashfreePayment: (params: {
+    orderId: string;
+    proposalId?: string;
+  }) => Promise<{
+    success: boolean;
+    verified: boolean;
+    status: string;
+    paidAmount?: number;
+    paymentId?: string;
+    paymentDate?: string;
+    paymentMethod?: string;
+    error?: string;
+    message?: string;
+  }>;
   createPaymentLink: (params: {
     invoiceId: string;
     invoiceNumber: string;
@@ -7745,7 +7774,12 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const fetchPaymentConfig = async (): Promise<PaymentGatewayPublicConfig> => {
     try {
-      const res = await fetch('/api/payment/config');
+      const res = await fetch('/api/payment/config', {
+        headers: {
+          'x-user-role': userProfile?.role || 'employee',
+          'x-user-id': userProfile?.uid || '',
+        },
+      });
       if (res.ok) {
         const data = await res.json();
         setPaymentConfig(data);
@@ -7761,7 +7795,11 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     try {
       const res = await fetch('/api/payment/config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-role': userProfile?.role || 'employee',
+          'x-user-id': userProfile?.uid || '',
+        },
         body: JSON.stringify(configData),
       });
       const data = await res.json();
@@ -7788,12 +7826,94 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     try {
       const res = await fetch('/api/payment/test-connection', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-role': userProfile?.role || 'employee',
+          'x-user-id': userProfile?.uid || '',
+        },
       });
       const data = await res.json();
       return data;
     } catch (err: any) {
       return { success: false, error: err.message || 'Connection test failed' };
+    }
+  };
+
+  const createCashfreeOrder = async (params: {
+    proposalId: string;
+    proposalNumber?: string;
+    verifiedAmount: number;
+    customerDetails?: { name?: string; email?: string; phone?: string };
+    proposalData?: any;
+  }): Promise<{
+    success: boolean;
+    paymentSessionId?: string;
+    orderId?: string;
+    amount?: number;
+    currency?: string;
+    environment?: string;
+    error?: string;
+  }> => {
+    try {
+      const res = await fetch('/api/payment/cashfree/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const rawText = await res.text().catch(() => '');
+      let data: any = null;
+      try { data = JSON.parse(rawText); } catch {}
+      if (!res.ok || !data) {
+        return {
+          success: false,
+          error: data?.error || (rawText ? rawText.slice(0, 100) : `HTTP ${res.status}`),
+        };
+      }
+      return data;
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Network error creating Cashfree order' };
+    }
+  };
+
+  const verifyCashfreePayment = async (params: {
+    orderId: string;
+    proposalId?: string;
+  }): Promise<{
+    success: boolean;
+    verified: boolean;
+    status: string;
+    paidAmount?: number;
+    paymentId?: string;
+    paymentDate?: string;
+    paymentMethod?: string;
+    error?: string;
+    message?: string;
+  }> => {
+    try {
+      const res = await fetch('/api/payment/cashfree/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const rawText = await res.text().catch(() => '');
+      let data: any = null;
+      try { data = JSON.parse(rawText); } catch {}
+      if (!res.ok || !data) {
+        return {
+          success: false,
+          verified: false,
+          status: 'Failed',
+          error: data?.error || (rawText ? rawText.slice(0, 100) : `HTTP ${res.status}`),
+        };
+      }
+      return data;
+    } catch (err: any) {
+      return {
+        success: false,
+        verified: false,
+        status: 'Failed',
+        error: err.message || 'Network error verifying Cashfree payment',
+      };
     }
   };
 
@@ -9270,11 +9390,59 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setDashboardConfig(updated);
   };
 
+  // ============================================================
+  // ROLE-BASED ACCESS CONTROL & DATA SCOPING (ADMIN VS EMPLOYEE)
+  // ============================================================
+  const authorizedCustomers = useMemo(() => {
+    if (isAdmin) return customers;
+    return customers.filter(
+      (c) =>
+        c.assignedEmployeeId === userProfile?.uid ||
+        c.assignedEmployeeId === userProfile?.employeeId ||
+        c.createdBy === userProfile?.uid
+    );
+  }, [customers, isAdmin, userProfile]);
+
+  const authorizedProposals = useMemo(() => {
+    if (isAdmin) return proposals;
+    return proposals.filter(
+      (p) =>
+        p.assignedEmployeeId === userProfile?.uid ||
+        p.assignedEmployeeId === userProfile?.employeeId ||
+        p.createdBy === userProfile?.uid
+    );
+  }, [proposals, isAdmin, userProfile]);
+
+  const authorizedLeads = useMemo(() => {
+    if (isAdmin) return leads;
+    return leads.filter(
+      (l) =>
+        l.assignedEmployeeId === userProfile?.uid ||
+        l.assignedEmployeeId === userProfile?.employeeId ||
+        l.createdBy === userProfile?.uid
+    );
+  }, [leads, isAdmin, userProfile]);
+
+  const authorizedEmployees = useMemo(() => {
+    if (isAdmin) return employees;
+    // An employee must NOT have access to all employees!
+    return userProfile ? [userProfile] : [];
+  }, [employees, isAdmin, userProfile]);
+
+  const authorizedEmployeeRecords = useMemo(() => {
+    if (isAdmin) return employeeRecords;
+    return employeeRecords.filter(
+      (e) =>
+        e.uid === userProfile?.uid ||
+        e.email.toLowerCase() === (userProfile?.email || '').toLowerCase()
+    );
+  }, [employeeRecords, isAdmin, userProfile]);
+
   return (
     <CrmDataContext.Provider
       value={{
-        customers,
-        leads,
+        customers: authorizedCustomers,
+        leads: authorizedLeads,
         activities,
         calls,
         followups,
@@ -9291,8 +9459,8 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         updateService,
         deleteService,
         toggleServiceStatus,
-        proposals,
-        employees,
+        proposals: authorizedProposals,
+        employees: authorizedEmployees,
         companySettings,
         bankSettings,
         bankAccounts,
@@ -9413,6 +9581,8 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         fetchPaymentConfig,
         savePaymentConfig,
         testPaymentConnection,
+        createCashfreeOrder,
+        verifyCashfreePayment,
         createPaymentLink,
         cancelPaymentLink,
         initiateRefund,
@@ -9452,7 +9622,7 @@ export const CrmDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         generateNextPurchaseNumber,
         generateNextSupplierCode,
         // Phase 17: HR, Employee Management, Attendance, Leave, Tasks & Payroll
-        employeeRecords,
+        employeeRecords: authorizedEmployeeRecords,
         departmentRecords,
         designationRecords,
         roleRecords,

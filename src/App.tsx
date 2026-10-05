@@ -55,8 +55,9 @@ import { CustomerPortalProvider } from './context/CustomerPortalContext';
 import { CommunicationProvider } from './context/CommunicationContext';
 import { CustomerPortalTab } from './types/crm';
 import { CustomerDetailTab } from './components/modals/CustomerDetailDrawer';
+import { EmployeeDashboardView } from './components/views/EmployeeDashboardView';
 
-const ADMIN_ONLY_VIEWS: ActiveView[] = ['employees', 'settings', 'activities', 'hr'];
+const ADMIN_ONLY_VIEWS: ActiveView[] = ['employees', 'settings', 'activities', 'hr', 'reports', 'bulk-upload', 'finance'];
 
 const VIEW_PERMISSION_MAP: Partial<Record<ActiveView, keyof EmployeePermissions>> = {
   customers: 'viewCustomers',
@@ -138,6 +139,15 @@ function MainApp() {
     
     const viewSegment = segments[1] || segments[0];
     const pathnameLower = pathname.toLowerCase();
+    if (pathnameLower.includes('payment') && (pathnameLower.startsWith('/admin') || pathnameLower.includes('/admin/'))) {
+      return 'settings';
+    }
+    if (pathnameLower.includes('email') && (pathnameLower.startsWith('/admin') || pathnameLower.includes('/admin/'))) {
+      return 'settings';
+    }
+    if (pathnameLower.includes('employee') && (pathnameLower.startsWith('/admin') || pathnameLower.includes('/admin/'))) {
+      return 'employees';
+    }
     if (pathnameLower.startsWith('/reports') || pathnameLower.includes('/reports')) {
       return 'reports';
     }
@@ -407,21 +417,39 @@ function MainApp() {
         {/* Dynamic Workspace Views */}
         <main className="flex-1 pb-16">
           {activeView === 'dashboard' && (
-            <DashboardView
-              onNavigate={navigateTo}
-              onOpenCustomerModal={() => {
-                setCustomerToEdit(null);
-                setIsCustomerModalOpen(true);
-              }}
-              onOpenLeadModal={() => {
-                setLeadToEdit(null);
-                setIsLeadModalOpen(true);
-              }}
-              onOpenProposalModal={() => {
-                setProposalTargetCustomer(null);
-                setIsProposalModalOpen(true);
-              }}
-            />
+            isAdmin ? (
+              <DashboardView
+                onNavigate={navigateTo}
+                onOpenCustomerModal={() => {
+                  setCustomerToEdit(null);
+                  setIsCustomerModalOpen(true);
+                }}
+                onOpenLeadModal={() => {
+                  setLeadToEdit(null);
+                  setIsLeadModalOpen(true);
+                }}
+                onOpenProposalModal={() => {
+                  setProposalTargetCustomer(null);
+                  setIsProposalModalOpen(true);
+                }}
+              />
+            ) : (
+              <EmployeeDashboardView
+                onNavigate={navigateTo}
+                onOpenCustomerModal={() => {
+                  setCustomerToEdit(null);
+                  setIsCustomerModalOpen(true);
+                }}
+                onOpenLeadModal={() => {
+                  setLeadToEdit(null);
+                  setIsLeadModalOpen(true);
+                }}
+                onOpenProposalModal={() => {
+                  setProposalTargetCustomer(null);
+                  setIsProposalModalOpen(true);
+                }}
+              />
+            )
           )}
 
           {activeView === 'sales' && (

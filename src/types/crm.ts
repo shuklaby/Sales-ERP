@@ -894,6 +894,7 @@ export type ProposalStatus =
   | 'Viewed'
   | 'Under Discussion'
   | 'Accepted'
+  | 'Approved'
   | 'Rejected'
   | 'Expired'
   | 'Pending Approval'
@@ -1092,6 +1093,13 @@ export interface ProposalRecord {
   acceptedBy?: string;
   rejectedAt?: string;
   rejectionReason?: string;
+  paymentStatus?: 'Not Required' | 'Pending' | 'Paid' | 'Failed' | 'Cancelled';
+  paidAmount?: number;
+  paymentDate?: string;
+  cashfreeOrderId?: string;
+  cashfreePaymentId?: string;
+  cashfreePaymentMethod?: string;
+  paymentGatewayUsed?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -1698,7 +1706,7 @@ export interface CustomerLedgerEntry {
 // PHASE 13 — ONLINE PAYMENT GATEWAYS & LINKS
 // ==========================================
 
-export type SupportedGateway = 'razorpay' | 'stripe' | 'other';
+export type SupportedGateway = 'razorpay' | 'cashfree' | 'stripe' | 'other';
 export type GatewayEnvironment = 'Test' | 'Live';
 export type GatewayStatus =
   | 'Connected'
@@ -1716,6 +1724,9 @@ export interface PaymentGatewayPublicConfig {
   status: GatewayStatus;
   publicKey?: string;
   publicKeyMasked?: string;
+  cashfreeAppIdMasked?: string;
+  cashfreeEnvironment?: 'Sandbox' | 'Production' | 'Test' | 'Live';
+  hasCashfreeSecret?: boolean;
   webhookUrl?: string;
   enabledMethods?: {
     upi: boolean;

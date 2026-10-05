@@ -15,12 +15,35 @@ import {
   Globe,
   MapPin,
   Calendar,
+  CheckCircle2,
+  Lock,
+  ArrowRight,
 } from 'lucide-react';
 import { doc, getDoc, updateDoc, collection, query, where, getDocs, setDoc } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { ProposalRecord } from '../../types/crm';
 import { generateProposalPdf } from '../../utils/proposalPdfGenerator';
 import { numberToWordsINR } from '../../utils/numberToWords';
+
+const loadCashfreeSdk = (): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    if ((window as any).Cashfree) {
+      return resolve((window as any).Cashfree);
+    }
+    const existing = document.getElementById('cashfree-sdk-js');
+    if (existing) {
+      existing.addEventListener('load', () => resolve((window as any).Cashfree));
+      return;
+    }
+    const script = document.createElement('script');
+    script.id = 'cashfree-sdk-js';
+    script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
+    script.async = true;
+    script.onload = () => resolve((window as any).Cashfree);
+    script.onerror = () => reject(new Error('Failed to load Cashfree Payment SDK. Please verify your internet connection.'));
+    document.body.appendChild(script);
+  });
+};
 
 interface PublicProposalViewProps {
   proposalIdOrNumber: string;
@@ -37,6 +60,16 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
   const [decisionNotes, setDecisionNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [decisionSuccess, setDecisionSuccess] = useState<string | null>(null);
+
+  // Cashfree Payment Integration
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [paymentSuccessData, setPaymentSuccessData] = useState<{
+    orderId?: string;
+    paidAmount?: number;
+    paymentId?: string;
+    paymentDate?: string;
+  } | null>(null);
 
   useEffect(() => {
     async function fetchProposal() {
@@ -195,6 +228,173 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
     }).catch(console.warn);
   };
 
+  // Listen for redirect return from Cashfree checkout
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const cfOrderId = params.get('cf_order_id') || params.get('order_id');
+    if (cfOrderId && proposal && proposal.paymentStatus !== 'Paid') {
+      verifyAndFinalizePayment(cfOrderId);
+    }
+  }, [proposal?.id]);
+
+  const verifyAndFinalizePayment = async (orderId: string) => {
+    setIsProcessingPayment(true);
+    setPaymentError(null);
+    try {
+      const res = await fetch('/api/payment/cashfree/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId, proposalId: proposal?.id }),
+      });
+      const rawText = await res.text().catch(() => '');
+      let verifyData: any = null;
+      try { verifyData = JSON.parse(rawText); } catch {}
+
+      if (verifyData && verifyData.verified && verifyData.status === 'Paid') {
+        const nowIso = verifyData.paymentDate || new Date().toISOString();
+        const paidAmount = Number(verifyData.paidAmount || proposal?.grandTotal || 0);
+        const paymentId = verifyData.paymentId || `PAY-${orderId}`;
+
+        if (proposal) {
+          const propRef = doc(db, 'proposals', proposal.id);
+          await updateDoc(propRef, {
+            paymentStatus: 'Paid',
+            paidAmount,
+            paymentDate: nowIso,
+            cashfreeOrderId: orderId,
+            cashfreePaymentId: paymentId,
+            cashfreePaymentMethod: verifyData.paymentMethod || 'Online',
+            paymentGatewayUsed: 'cashfree',
+            updatedAt: nowIso,
+          });
+
+          const actId = `act_${Date.now()}`;
+          await setDoc(doc(db, 'activities', actId), {
+            id: actId,
+            customerId: proposal.customerId,
+            title: `Proposal Payment Received: ${proposal.proposalNumber}`,
+            description: `Payment of ₹${paidAmount.toLocaleString('en-IN')} received via Cashfree for proposal ${proposal.proposalNumber} [Order: ${orderId}]`,
+            type: 'PAYMENT_RECEIVED',
+            timestamp: nowIso,
+            createdAt: nowIso,
+          }).catch(console.warn);
+
+          const notifId = `notif_${Date.now()}`;
+          await setDoc(doc(db, 'notifications', notifId), {
+            id: notifId,
+            notificationId: `NOTIF-${Date.now().toString().slice(-6)}`,
+            userId: proposal.assignedEmployeeId || 'all_admins',
+            type: 'PROPOSAL_PAID',
+            title: `Proposal Paid 💰: ${proposal.proposalNumber}`,
+            message: `Payment of ₹${paidAmount.toLocaleString('en-IN')} confirmed via Cashfree for proposal ${proposal.proposalNumber}.`,
+            relatedId: proposal.id,
+            relatedType: 'proposal',
+            read: false,
+            createdAt: nowIso,
+          }).catch(console.warn);
+
+          setProposal((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  paymentStatus: 'Paid',
+                  paidAmount,
+                  paymentDate: nowIso,
+                  cashfreeOrderId: orderId,
+                  cashfreePaymentId: paymentId,
+                  cashfreePaymentMethod: verifyData.paymentMethod || 'Online',
+                  paymentGatewayUsed: 'cashfree',
+                }
+              : null
+          );
+        }
+
+        setPaymentSuccessData({
+          orderId,
+          paidAmount,
+          paymentId,
+          paymentDate: nowIso,
+        });
+      } else {
+        if (verifyData && !verifyData.verified) {
+          setPaymentError(verifyData.message || 'Payment not completed or pending. Please try again if amount was not deducted.');
+        }
+      }
+    } catch (err: any) {
+      setPaymentError(err.message || 'Error communicating with Cashfree verification service.');
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
+
+  const handlePayWithCashfree = async () => {
+    if (!proposal) return;
+    const isApproved = proposal.status === 'Accepted' || proposal.status === 'Approved';
+    if (!isApproved) {
+      alert('Please approve the proposal before making payment.');
+      return;
+    }
+    if (proposal.paymentStatus === 'Paid') {
+      alert('This proposal has already been paid in full.');
+      return;
+    }
+
+    setIsProcessingPayment(true);
+    setPaymentError(null);
+
+    try {
+      const res = await fetch('/api/payment/cashfree/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          proposalId: proposal.id,
+          proposalNumber: proposal.proposalNumber,
+          verifiedAmount: proposal.grandTotal,
+          proposalData: {
+            id: proposal.id,
+            proposalNumber: proposal.proposalNumber,
+            grandTotal: proposal.grandTotal,
+            customerId: proposal.customerId,
+            customerName: proposal.customerName,
+            customerEmail: proposal.customerEmail,
+            customerMobile: proposal.customerMobile,
+            status: proposal.status,
+            paymentStatus: proposal.paymentStatus,
+            viewToken: proposal.viewToken || proposalIdOrNumber,
+          },
+        }),
+      });
+
+      const rawText = await res.text().catch(() => '');
+      let orderData: any = null;
+      try { orderData = JSON.parse(rawText); } catch {}
+
+      if (!res.ok || !orderData || !orderData.paymentSessionId) {
+        throw new Error(orderData?.error || 'Failed to initialize Cashfree payment session.');
+      }
+
+      const CashfreeSdk = await loadCashfreeSdk();
+      const cashfreeInstance = CashfreeSdk({
+        mode: orderData.environment === 'production' ? 'production' : 'sandbox',
+      });
+
+      const checkoutOptions = {
+        paymentSessionId: orderData.paymentSessionId,
+        redirectTarget: '_modal',
+      };
+
+      cashfreeInstance.checkout(checkoutOptions).then(async (result: any) => {
+        console.log('[Cashfree Modal Result]', result);
+        await verifyAndFinalizePayment(orderData.orderId);
+      });
+    } catch (err: any) {
+      console.error('[Cashfree Error]', err);
+      setPaymentError(err.message || 'Unable to open Cashfree Checkout. Please try again.');
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
+
   const handleClientDecisionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!proposal || !clientDecision) return;
@@ -211,8 +411,10 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
       const propRef = doc(db, 'proposals', proposal.id);
 
       if (clientDecision === 'accept') {
+        const currentPayStatus = proposal.paymentStatus === 'Paid' ? 'Paid' : 'Pending';
         await updateDoc(propRef, {
           status: 'Accepted',
+          paymentStatus: currentPayStatus,
           acceptedAt: nowIso,
           acceptedBy: cleanClientName,
           updatedAt: nowIso,
@@ -267,6 +469,7 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
             ? {
                 ...prev,
                 status: 'Accepted',
+                paymentStatus: currentPayStatus,
                 acceptedAt: nowIso,
                 acceptedBy: cleanClientName,
               }
@@ -418,19 +621,25 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
               <Download className="w-3.5 h-3.5" /> Download Official PDF
             </button>
 
+            {(proposal.status === 'Accepted' || proposal.status === 'Approved') && (
+              <span className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold shadow-2xs">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Proposal Approved
+              </span>
+            )}
+
             {!isTerminal && (
               <>
                 <button
                   onClick={() => setClientDecision('accept')}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors cursor-pointer"
                 >
-                  <CheckCircle className="w-3.5 h-3.5" /> Accept Proposal
+                  <CheckCircle className="w-3.5 h-3.5" /> Approve Proposal
                 </button>
                 <button
                   onClick={() => setClientDecision('reject')}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 rounded-xl text-xs font-semibold transition-colors"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
                 >
-                  <XCircle className="w-3.5 h-3.5" /> Reject
+                  <XCircle className="w-3.5 h-3.5" /> Reject Proposal
                 </button>
               </>
             )}
@@ -807,6 +1016,158 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
             </div>
           </div>
         </div>
+
+        {/* PAYMENT SECTION — Appears Directly Below Approved Proposal */}
+        {(proposal.status === 'Accepted' || proposal.status === 'Approved') && (
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
+            {/* Header: Proposal Approved Confirmation */}
+            <div className="bg-emerald-700 text-white p-6 sm:p-7 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center">
+                  <CheckCircle2 className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-black tracking-tight">✓ Proposal Approved</h3>
+                  <p className="text-xs text-emerald-100">
+                    {proposal.acceptedBy ? `Acknowledged by ${proposal.acceptedBy.replace(' (Response submitted through proposal link)', '')}` : 'Commercial terms accepted'}
+                    {proposal.acceptedAt && ` on ${new Date(proposal.acceptedAt).toLocaleDateString('en-IN')}`}
+                  </p>
+                </div>
+              </div>
+
+              {proposal.paymentStatus === 'Paid' ? (
+                <span className="px-3 py-1 bg-white text-emerald-800 rounded-full text-xs font-black uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
+                  <Check className="w-3.5 h-3.5" /> Payment Status: Paid
+                </span>
+              ) : (
+                <span className="px-3 py-1 bg-emerald-800 text-emerald-100 rounded-full text-xs font-bold uppercase tracking-wider">
+                  Payment Status: {proposal.paymentStatus || 'Pending'}
+                </span>
+              )}
+            </div>
+
+            <div className="p-6 sm:p-8 space-y-6">
+              {/* If Already Paid */}
+              {proposal.paymentStatus === 'Paid' ? (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black">
+                      ✓
+                    </div>
+                    <div>
+                      <h4 className="text-base font-bold text-emerald-950">Payment Successful</h4>
+                      <p className="text-xs text-emerald-700">
+                        Thank you! Your payment has been received and verified securely by Cashfree.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-emerald-200/80 text-xs">
+                    <div className="bg-white p-3 rounded-xl border border-emerald-200">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Amount Paid</span>
+                      <span className="text-base font-black font-mono text-emerald-800">
+                        ₹{(proposal.paidAmount || proposal.grandTotal).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+
+                    <div className="bg-white p-3 rounded-xl border border-emerald-200">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Payment Reference ID</span>
+                      <span className="text-xs font-bold font-mono text-slate-800 block truncate">
+                        {proposal.cashfreePaymentId || proposal.cashfreeOrderId || 'CF-VERIFIED'}
+                      </span>
+                    </div>
+
+                    <div className="bg-white p-3 rounded-xl border border-emerald-200">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Payment Date</span>
+                      <span className="text-xs font-bold font-mono text-slate-800">
+                        {proposal.paymentDate
+                          ? new Date(proposal.paymentDate).toLocaleDateString('en-IN', {
+                              day: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : new Date().toLocaleDateString('en-IN')}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* Payment Pending: Show Payment Summary & Pay Now Button */
+                <div className="space-y-6">
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-200 pb-4">
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">Payment Summary</h4>
+                        <p className="text-xs text-slate-500">
+                          Complete your commercial confirmation using Cashfree Payment Gateway
+                        </p>
+                      </div>
+                      <span className="px-3 py-1 bg-amber-100 text-amber-800 border border-amber-200 rounded-full text-xs font-bold">
+                        Payment Status: Pending
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2">
+                      <div>
+                        <span className="text-xs text-slate-500 block">Total Payable Amount:</span>
+                        <div className="text-2xl sm:text-3xl font-black font-mono text-indigo-700">
+                          ₹{proposal.grandTotal.toLocaleString('en-IN')}
+                        </div>
+                        <span className="text-[11px] text-slate-400 italic block mt-0.5">
+                          Indian Rupees {numberToWordsINR(proposal.grandTotal)} Only
+                        </span>
+                      </div>
+
+                      <div className="w-full sm:w-auto">
+                        <button
+                          type="button"
+                          onClick={handlePayWithCashfree}
+                          disabled={isProcessingPayment}
+                          className="w-full sm:w-auto px-8 py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 text-white rounded-xl text-sm font-bold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          {isProcessingPayment ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              <span>Opening Cashfree Checkout...</span>
+                            </>
+                          ) : (
+                            <>
+                              <CreditCard className="w-4 h-4" />
+                              <span>Pay Now</span>
+                              <ArrowRight className="w-4 h-4" />
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {paymentError && (
+                    <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-xs text-rose-800">
+                      <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                      <div>
+                        <span className="font-bold block">Payment Incomplete</span>
+                        <span>{paymentError}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-slate-400 text-xs pt-2">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                      <span>256-bit Encrypted Security via Cashfree Payments</span>
+                    </div>
+                    <div className="flex items-center gap-2 font-mono text-[11px]">
+                      <span>Supports: UPI • Credit/Debit Cards • Net Banking • Wallets</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

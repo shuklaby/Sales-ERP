@@ -25,6 +25,11 @@ export const PaymentGatewaySettingsView: React.FC = () => {
   const [merchantName, setMerchantName] = useState(paymentConfig.merchantName || 'SparkGenTechnology');
   const [currency, setCurrency] = useState(paymentConfig.currency || 'INR');
 
+  // Cashfree Credentials (stored strictly server-side, never exposed to frontend)
+  const [cashfreeAppId, setCashfreeAppId] = useState('');
+  const [cashfreeSecretKey, setCashfreeSecretKey] = useState('');
+  const [cashfreeEnvironment, setCashfreeEnvironment] = useState<'Sandbox' | 'Production'>('Sandbox');
+
   // Gateway Credentials (stored strictly server-side, never in Firestore or client localStorage)
   const [razorpayKeyId, setRazorpayKeyId] = useState('');
   const [razorpayKeySecret, setRazorpayKeySecret] = useState('');
@@ -41,11 +46,14 @@ export const PaymentGatewaySettingsView: React.FC = () => {
   const [copiedWebhook, setCopiedWebhook] = useState(false);
 
   useEffect(() => {
-    fetchPaymentConfig().then((cfg) => {
-      setGateway(cfg.gateway);
-      setEnvironment(cfg.environment);
+    fetchPaymentConfig().then((cfg: any) => {
+      setGateway(cfg.gateway || 'cashfree');
+      setEnvironment(cfg.environment || 'Test');
       setMerchantName(cfg.merchantName || 'SparkGenTechnology');
       setCurrency(cfg.currency || 'INR');
+      if (cfg.cashfreeEnvironment) {
+        setCashfreeEnvironment(cfg.cashfreeEnvironment === 'Production' ? 'Production' : 'Sandbox');
+      }
     });
   }, []);
 
@@ -60,6 +68,9 @@ export const PaymentGatewaySettingsView: React.FC = () => {
       environment,
       merchantName: merchantName.trim() || 'SparkGenTechnology',
       currency: currency.trim() || 'INR',
+      cashfreeAppId: cashfreeAppId.trim() || undefined,
+      cashfreeSecretKey: cashfreeSecretKey.trim() || undefined,
+      cashfreeEnvironment,
       razorpayKeyId: razorpayKeyId.trim() || undefined,
       razorpayKeySecret: razorpayKeySecret.trim() || undefined,
       razorpayWebhookSecret: razorpayWebhookSecret.trim() || undefined,
@@ -78,6 +89,9 @@ export const PaymentGatewaySettingsView: React.FC = () => {
     setSaving(false);
     if (res.success) {
       setSaveSuccess(true);
+      setCashfreeSecretKey(''); // Clear plaintext secret from memory after save
+      setRazorpayKeySecret('');
+      await fetchPaymentConfig();
       setTimeout(() => setSaveSuccess(false), 4000);
     } else {
       setTestResult({ success: false, error: res.error || 'Failed to save configuration.' });
@@ -219,19 +233,19 @@ export const PaymentGatewaySettingsView: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {[
               {
+                id: 'cashfree',
+                name: 'Cashfree Payment Gateway',
+                desc: 'Official Proposal Checkout: UPI, Cards, Net Banking & Wallets (Recommended)',
+              },
+              {
                 id: 'razorpay',
                 name: 'Razorpay',
-                desc: 'UPI, Debit/Credit Cards, Net Banking & Wallets (Recommended for INR)',
+                desc: 'UPI, Debit/Credit Cards, Net Banking & Wallets for INR',
               },
               {
                 id: 'stripe',
                 name: 'Stripe',
                 desc: 'Global Cards, Apple Pay, Google Pay & Multi-Currency Settlement',
-              },
-              {
-                id: 'other',
-                name: 'Other Gateway',
-                desc: 'Custom API integration or aggregator',
               },
             ].map((gw) => (
               <button
@@ -320,14 +334,99 @@ export const PaymentGatewaySettingsView: React.FC = () => {
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
               <Lock className="w-3.5 h-3.5 text-blue-400" />
-              {gateway === 'razorpay' ? 'Razorpay Credentials' : gateway === 'stripe' ? 'Stripe Credentials' : 'API Credentials'}
+              {gateway === 'cashfree' ? 'Cashfree Credentials' : gateway === 'razorpay' ? 'Razorpay Credentials' : gateway === 'stripe' ? 'Stripe Credentials' : 'API Credentials'}
             </h3>
-            {paymentConfig.publicKeyMasked && (
+            {gateway === 'cashfree' && paymentConfig.cashfreeAppIdMasked && (
+              <span className="text-[11px] text-slate-400 font-mono">
+                Current App ID: {paymentConfig.cashfreeAppIdMasked}
+              </span>
+            )}
+            {gateway === 'razorpay' && paymentConfig.publicKeyMasked && (
               <span className="text-[11px] text-slate-400 font-mono">
                 Current Public Key: {paymentConfig.publicKeyMasked}
               </span>
             )}
           </div>
+
+          {gateway === 'cashfree' && (
+            <div className="space-y-4 bg-slate-950/40 p-4 rounded-2xl border border-slate-800">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 mb-1.5 block">
+                    Cashfree Environment *
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCashfreeEnvironment('Sandbox')}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition text-center border ${
+                        cashfreeEnvironment === 'Sandbox'
+                          ? 'bg-blue-600 text-white border-blue-500 shadow'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                      }`}
+                    >
+                      Sandbox
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCashfreeEnvironment('Production')}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition text-center border ${
+                        cashfreeEnvironment === 'Production'
+                          ? 'bg-emerald-600 text-white border-emerald-500 shadow'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                      }`}
+                    >
+                      Production
+                    </button>
+                  </div>
+                  <span className="text-[10px] text-slate-500 mt-1 block">
+                    Use Sandbox for testing proposal payments without actual money deduction.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 mb-1 block">
+                    Cashfree Client ID / App ID *
+                  </label>
+                  <input
+                    type="text"
+                    value={cashfreeAppId}
+                    onChange={(e) => setCashfreeAppId(e.target.value)}
+                    placeholder={paymentConfig.cashfreeAppIdMasked || 'TEST10... or PROD...'}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-blue-500"
+                  />
+                  {paymentConfig.cashfreeAppIdMasked && !cashfreeAppId && (
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      Saved App ID: {paymentConfig.cashfreeAppIdMasked}
+                    </span>
+                  )}
+                </div>
+
+                <div className="sm:col-span-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-300 block">
+                      Cashfree Client Secret (Stored Securely Server-Side) *
+                    </label>
+                    {paymentConfig.hasCashfreeSecret && (
+                      <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" /> Secret Configured
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="password"
+                    value={cashfreeSecretKey}
+                    onChange={(e) => setCashfreeSecretKey(e.target.value)}
+                    placeholder={paymentConfig.hasCashfreeSecret ? '•••••••••••••••••••••••••••••••• (Leave blank to keep existing)' : 'Enter Cashfree Client Secret'}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-blue-500"
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Credentials are saved on the server/Vercel serverless environment and are never exposed to browser clients.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {gateway === 'razorpay' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

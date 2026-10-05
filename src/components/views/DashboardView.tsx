@@ -48,6 +48,7 @@ import {
   formatDateDisplayIST,
 } from '../../utils/dateRangeUtils';
 import { ManagementDashboard } from '../dashboard/ManagementDashboard';
+import { EmployeeDashboardView } from './EmployeeDashboardView';
 
 interface DashboardViewProps {
   onNavigate: (view: ActiveView) => void;
@@ -745,6 +746,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       setIsClockLoading(false);
     }
   };
+
+  // ROLE SECURITY GUARD: If user is an employee, render dedicated Employee Operations Dashboard
+  if (!isAdmin) {
+    return (
+      <EmployeeDashboardView
+        onNavigate={onNavigate}
+        onOpenCustomerModal={onOpenCustomerModal}
+        onOpenLeadModal={onOpenLeadModal}
+        onOpenProposalModal={onOpenProposalModal}
+      />
+    );
+  }
 
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-7xl mx-auto">

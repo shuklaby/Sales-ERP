@@ -20,6 +20,7 @@ import {
   Clock,
   History,
   FileCheck,
+  CreditCard,
 } from 'lucide-react';
 import { ProposalRecord, ProposalStatus, InvoiceRecord } from '../../types/crm';
 import { useCrmData } from '../../context/CrmDataContext';
@@ -68,13 +69,13 @@ export const ProposalsView: React.FC<ProposalsViewProps> = ({
   // Authorization Filter (Section 1: Admin can see all proposals. Employees see authorized proposals)
   const filteredProposals = useMemo(() => {
     return proposals.filter((p) => {
-      // Role Authorization Guard
+      // Role Authorization Guard: Admin can see all proposals. Employees see ONLY assigned proposals
       const isAuthorized =
         isAdmin ||
-        hasPermission('viewAllProposals') ||
         p.createdBy === userProfile?.uid ||
         p.assignedEmployeeId === userProfile?.uid ||
-        p.createdByName === userProfile?.name;
+        (userProfile?.employeeId && p.assignedEmployeeId === userProfile?.employeeId) ||
+        (userProfile?.employeeId && (p as any).employeeId === userProfile?.employeeId);
 
       if (!isAuthorized) return false;
 
@@ -337,22 +338,36 @@ export const ProposalsView: React.FC<ProposalsViewProps> = ({
 
                     {/* Status */}
                     <td className="py-3 px-4">
-                      <select
-                        value={prop.status}
-                        onChange={(e) => handleStatusUpdate(prop.id, e.target.value as ProposalStatus)}
-                        className={`text-[11px] px-2 py-0.5 rounded-full font-semibold border ${getStatusBadge(
-                          prop.status
-                        )} bg-transparent cursor-pointer`}
-                      >
-                        <option value="Draft">Draft</option>
-                        <option value="Sent">Sent</option>
-                        <option value="Viewed">Viewed</option>
-                        <option value="Under Discussion">Under Discussion</option>
-                        <option value="Accepted">Accepted</option>
-                        <option value="Rejected">Rejected</option>
-                        <option value="Expired">Expired</option>
-                        <option value="Cancelled">Cancelled</option>
-                      </select>
+                      <div className="space-y-1">
+                        <div>
+                          <select
+                            value={prop.status}
+                            onChange={(e) => handleStatusUpdate(prop.id, e.target.value as ProposalStatus)}
+                            className={`text-[11px] px-2 py-0.5 rounded-full font-semibold border ${getStatusBadge(
+                              prop.status
+                            )} bg-transparent cursor-pointer`}
+                          >
+                            <option value="Draft">Draft</option>
+                            <option value="Sent">Sent</option>
+                            <option value="Viewed">Viewed</option>
+                            <option value="Under Discussion">Under Discussion</option>
+                            <option value="Accepted">Accepted</option>
+                            <option value="Rejected">Rejected</option>
+                            <option value="Expired">Expired</option>
+                            <option value="Cancelled">Cancelled</option>
+                          </select>
+                        </div>
+
+                        {prop.paymentStatus === 'Paid' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                            <Check className="w-3 h-3 text-emerald-600" /> Paid
+                          </span>
+                        ) : prop.status === 'Accepted' || prop.paymentStatus === 'Pending' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                            <Clock className="w-3 h-3 text-amber-600" /> Payment: Pending
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
 
                     {/* Actions */}
@@ -645,6 +660,51 @@ export const ProposalsView: React.FC<ProposalsViewProps> = ({
                   >
                     {previewProposal.status}
                   </span>
+                </div>
+              </div>
+
+              {/* Payment & Cashfree Gateway Details Card */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-900 block text-xs uppercase tracking-wider flex items-center gap-1.5">
+                    <CreditCard className="w-3.5 h-3.5 text-indigo-600" /> Payment & Gateway Details
+                  </span>
+                  <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                    previewProposal.paymentStatus === 'Paid'
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                      : previewProposal.paymentStatus === 'Pending' || previewProposal.status === 'Accepted'
+                      ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                      : 'bg-slate-200 text-slate-700'
+                  }`}>
+                    Payment: {previewProposal.paymentStatus || (previewProposal.status === 'Accepted' ? 'Pending' : 'Not Required')}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-1">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Payment Status</span>
+                    <span className="font-bold text-slate-800">
+                      {previewProposal.paymentStatus || (previewProposal.status === 'Accepted' ? 'Pending' : 'Not Required')}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Paid Amount</span>
+                    <span className="font-mono font-bold text-emerald-700">
+                      {previewProposal.paidAmount ? `₹${previewProposal.paidAmount.toLocaleString('en-IN')}` : '₹0.00'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Cashfree Order ID</span>
+                    <span className="font-mono text-slate-800 truncate block">
+                      {previewProposal.cashfreeOrderId || previewProposal.cashfreePaymentId || 'None'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Payment Date</span>
+                    <span className="text-slate-800">
+                      {previewProposal.paymentDate ? new Date(previewProposal.paymentDate).toLocaleString('en-IN') : 'N/A'}
+                    </span>
+                  </div>
                 </div>
               </div>
 

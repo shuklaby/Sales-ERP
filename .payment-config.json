@@ -1,0 +1,13 @@
+{
+  "gateway": "cashfree",
+  "environment": "Test",
+  "merchantName": "SparkGenTechnology",
+  "currency": "INR",
+  "cashfreeEnvironment": "Sandbox",
+  "enabledMethods": {
+    "upi": true,
+    "cards": true,
+    "netbanking": true,
+    "wallets": true
+  }
+}

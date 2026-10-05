@@ -8,14 +8,15 @@ service cloud.firestore {
 
     function isSuperAdmin() {
       return isSignedIn() && (
-        request.auth.token.email == 'shukla.by@gmail.com' ||
-        request.auth.token.email == 'admin@sparkgen.com' ||
-        request.auth.token.email == 'admin@sparkgentechnology.com' ||
-        request.auth.token.email == 'admin@salessphere.com' ||
-        (request.auth.token.email != null && request.auth.token.email.matches('.*admin.*')) ||
+        request.auth.token.email in [
+          'shukla.by@gmail.com',
+          'admin@sparkgen.com',
+          'admin@sparkgentechnology.com',
+          'admin@salessphere.com'
+        ] ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
-        (request.auth.token.firebase.sign_in_provider == 'anonymous')
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
       );
     }
 
@@ -25,8 +26,7 @@ service cloud.firestore {
 
     function isActiveEmployee() {
       return isSignedIn() && (
-        isSuperAdmin() ||
-        (request.auth.token.firebase.sign_in_provider == 'anonymous') || (
+        isSuperAdmin() || (
           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
           getUserData().status == 'active'
         )
@@ -48,14 +48,8 @@ service cloud.firestore {
 
     // Admins lookup collection
     match /admins/{adminId} {
-      allow read: if true;
-      allow write: if isSuperAdmin() || (isSignedIn() && request.auth.uid == adminId && (
-        request.auth.token.email == 'shukla.by@gmail.com' ||
-        request.auth.token.email == 'admin@sparkgen.com' ||
-        request.auth.token.email == 'admin@sparkgentechnology.com' ||
-        request.auth.token.email == 'admin@salessphere.com' ||
-        (request.auth.token.email != null && request.auth.token.email.matches('.*admin.*'))
-      ));
+      allow read: if isSuperAdmin();
+      allow write: if isSuperAdmin();
     }
 
     // Users collection: employee profiles
@@ -191,9 +185,10 @@ service cloud.firestore {
     match /proposals/{proposalId} {
       allow read: if true;
       allow create: if isSuperAdmin() || isActiveEmployee();
-      allow update: if isSuperAdmin() || isActiveEmployee() ||
-        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt', 'acceptedBy', 'rejectedAt', 'rejectionReason', 'viewedAt', 'updatedAt']));
-      allow delete: if isSuperAdmin() || isActiveEmployee();
+      allow update: if isSuperAdmin() ||
+        (isActiveEmployee() && (resource.data.assignedEmployeeId == request.auth.uid || resource.data.createdBy == request.auth.uid)) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt', 'acceptedBy', 'rejectedAt', 'rejectionReason', 'viewedAt', 'updatedAt', 'paymentStatus', 'paidAmount', 'paymentDate', 'cashfreeOrderId', 'cashfreePaymentId', 'cashfreePaymentMethod', 'paymentGatewayUsed']));
+      allow delete: if isSuperAdmin();
     }
     match /proposals/{proposalId}/items/{itemId} {
       allow read: if true;
@@ -486,9 +481,8 @@ service cloud.firestore {
 
     // Phase 17: HR, Employee Management, Attendance, Leave, Tasks & Payroll
     match /employees/{employeeId} {
-      allow read: if true;
-      allow create, update: if isSuperAdmin() || (isActiveEmployee() && (getUserData().permissions.manageEmployee == true || request.auth.uid == employeeId));
-      allow delete: if isSuperAdmin();
+      allow read: if isSuperAdmin() || (isSignedIn() && (resource.data.uid == request.auth.uid || resource.data.email == request.auth.token.email || request.auth.uid == employeeId));
+      allow create, update, delete: if isSuperAdmin();
     }
 
     match /departments/{deptId} {
