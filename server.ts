@@ -4,6 +4,8 @@ import path from 'path';
 import nodemailer, { type Transporter } from 'nodemailer';
 import fs from 'fs';
 import crypto from 'crypto';
+import { db } from './src/firebase.js';
+import { doc, getDoc, updateDoc, setDoc, query, collection, where, getDocs } from 'firebase/firestore';
 
 interface ExtendedRequest extends Request {
   rawBody?: Buffer;
@@ -945,39 +947,306 @@ app.post('/api/payment/test-connection', requireAdmin, async (req, res) => {
 });
 
 // =========================================================================
-// CASHFREE PAYMENT GATEWAY INTEGRATION ENDPOINTS
+// PROPOSAL & CASHFREE PAYMENT GATEWAY INTEGRATION ENDPOINTS
 // =========================================================================
 
-// A. Create Cashfree Order for Approved Proposal
-app.post('/api/payment/cashfree/create-order', async (req, res) => {
-  try {
-    const { proposalId, proposalNumber, verifiedAmount, customerDetails, proposalData } = req.body;
+// Helper to look up a proposal in Firestore securely by doc ID, viewToken, or proposalNumber
+async function findProposalDoc(proposalIdOrToken?: string, proposalNumber?: string) {
+  if (proposalIdOrToken) {
+    try {
+      const directRef = doc(db, 'proposals', proposalIdOrToken);
+      const snap = await getDoc(directRef);
+      if (snap.exists()) return { ref: directRef, data: { id: snap.id, ...snap.data() } as any };
+    } catch (e) {}
 
-    if (!proposalId && !proposalNumber) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing proposal identifier. proposalId or proposalNumber is required.',
+    try {
+      const q = query(collection(db, 'proposals'), where('viewToken', '==', proposalIdOrToken));
+      const qs = await getDocs(q);
+      if (!qs.empty) {
+        const d = qs.docs[0];
+        return { ref: d.ref, data: { id: d.id, ...d.data() } as any };
+      }
+    } catch (e) {}
+
+    try {
+      const q = query(collection(db, 'proposals'), where('proposalNumber', '==', proposalIdOrToken));
+      const qs = await getDocs(q);
+      if (!qs.empty) {
+        const d = qs.docs[0];
+        return { ref: d.ref, data: { id: d.id, ...d.data() } as any };
+      }
+    } catch (e) {}
+  }
+
+  if (proposalNumber) {
+    try {
+      const q = query(collection(db, 'proposals'), where('proposalNumber', '==', proposalNumber));
+      const qs = await getDocs(q);
+      if (!qs.empty) {
+        const d = qs.docs[0];
+        return { ref: d.ref, data: { id: d.id, ...d.data() } as any };
+      }
+    } catch (e) {}
+  }
+
+  return null;
+}
+
+// Helper to send automatic email notifications via Titan Mail (sales@sparkgentechnology.in)
+async function sendProposalEmailNotification({
+  proposalNumber,
+  customerEmail,
+  customerName,
+  type,
+  amount,
+  paymentId,
+}: {
+  proposalNumber: string;
+  customerEmail?: string;
+  customerName?: string;
+  type: 'ACCEPTED' | 'PAID';
+  amount?: number;
+  paymentId?: string;
+}) {
+  try {
+    const config = getStoredEmailConfig();
+    const effectivePass = config.smtpPass || process.env.TITAN_EMAIL_PASS || process.env.SMTP_PASS;
+    if (!effectivePass && !config.configured) {
+      console.log(`[Auto-Email Notice] Titan Mail credentials not active, skipping automatic email for ${type} - ${proposalNumber}`);
+      return;
+    }
+    const sender = `SparkGenTechnology <sales@sparkgentechnology.in>`;
+    const recipient = customerEmail || 'sales@sparkgentechnology.in';
+    const subject = type === 'ACCEPTED'
+      ? `Proposal Accepted - ${proposalNumber}`
+      : `Payment Received - ${proposalNumber}`;
+
+    const textContent = type === 'ACCEPTED'
+      ? `Dear ${customerName || 'Valued Customer'},\n\nThank you for accepting commercial proposal ${proposalNumber}.\nYour acceptance has been formally registered.\n\nSparkGenTechnology Commercial Desk\nsales@sparkgentechnology.in`
+      : `Dear ${customerName || 'Valued Customer'},\n\nThank you! We have received your payment of ₹${amount ? amount.toLocaleString('en-IN') : ''} for proposal ${proposalNumber}.\nPayment ID: ${paymentId || 'CF-VERIFIED'}\n\nSparkGenTechnology Commercial Desk\nsales@sparkgentechnology.in`;
+
+    const htmlContent = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background: #ffffff;">
+        <div style="padding-bottom: 16px; border-bottom: 2px solid #4f46e5; margin-bottom: 20px;">
+          <h2 style="color: #0f172a; margin: 0; font-size: 20px;">
+            ${type === 'ACCEPTED' ? '✓ Commercial Proposal Accepted' : '✓ Payment Received & Verified'}
+          </h2>
+          <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0;">SparkGenTechnology Commercial Desk</p>
+        </div>
+        <p style="color: #334155; font-size: 14px; line-height: 1.6;">
+          ${type === 'ACCEPTED'
+            ? `Dear <strong>${customerName || 'Customer'}</strong>,<br/><br/>Your acceptance of proposal <strong>${proposalNumber}</strong> has been successfully recorded. Thank you for partnering with us.`
+            : `Dear <strong>${customerName || 'Customer'}</strong>,<br/><br/>We have successfully received and verified your payment of <strong>₹${amount ? amount.toLocaleString('en-IN') : ''}</strong> for commercial proposal <strong>${proposalNumber}</strong>.`}
+        </p>
+        ${paymentId ? `<div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin: 16px 0; font-family: monospace; font-size: 13px; color: #1e293b;"><strong>Payment Reference ID:</strong> ${paymentId}</div>` : ''}
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0 16px 0;" />
+        <p style="font-size: 11px; color: #94a3b8; margin: 0;">
+          SparkGenTechnology SalesSphere • sales@sparkgentechnology.in
+        </p>
+      </div>
+    `;
+
+    const transporter = createSmtpTransporter({
+      ...config,
+      smtpPass: effectivePass,
+    });
+    await transporter.sendMail({
+      from: sender,
+      to: recipient,
+      cc: 'sales@sparkgentechnology.in',
+      subject,
+      text: textContent,
+      html: htmlContent,
+    });
+    console.log(`[Auto-Email] Sent "${subject}" to ${recipient}`);
+  } catch (err: any) {
+    console.warn(`[Auto-Email Notice] Could not send auto-notification email (non-blocking):`, err?.message);
+  }
+}
+
+// 1. Accept Proposal Endpoint
+app.post('/api/proposal/accept', async (req, res) => {
+  try {
+    const { proposalId, proposalNumber, viewToken, customerName, clientName } = req.body;
+    const found = await findProposalDoc(proposalId || viewToken, proposalNumber);
+    if (!found) {
+      return res.status(404).json({ success: false, error: 'Commercial proposal not found.' });
+    }
+
+    const dbProposal = found.data;
+    const currentStatus = String(dbProposal.status || '').toUpperCase();
+
+    if (currentStatus === 'CANCELLED') {
+      return res.status(400).json({ success: false, error: 'This proposal has been cancelled.' });
+    }
+
+    // Expiry check
+    if (dbProposal.validUntil) {
+      const today = new Date().toISOString().split('T')[0];
+      if (dbProposal.validUntil < today && currentStatus !== 'ACCEPTED') {
+        return res.status(400).json({ success: false, error: 'This proposal has expired.' });
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    const finalClientName = (customerName || clientName || dbProposal.customerSnapshot?.contactPerson || dbProposal.customerName || 'Customer Representative').trim();
+
+    // Prevent duplicate acceptance
+    if (currentStatus === 'ACCEPTED' && dbProposal.acceptedAt) {
+      const grandTotal = Number(dbProposal.grandTotal || 0);
+      const paidAmount = Number(dbProposal.paidAmount || dbProposal.amountPaid || 0);
+      const balanceDue = dbProposal.balanceDue !== undefined ? Number(dbProposal.balanceDue) : Math.max(0, grandTotal - paidAmount);
+      return res.json({
+        success: true,
+        alreadyAccepted: true,
+        message: 'Proposal is already accepted.',
+        status: 'Accepted',
+        proposalStatus: 'ACCEPTED',
+        acceptedBy: dbProposal.acceptedBy,
+        acceptedAt: dbProposal.acceptedAt,
+        amountPayable: grandTotal,
+        amountPaid: paidAmount,
+        balanceDue,
+        paymentStatus: dbProposal.paymentStatus || (paidAmount >= grandTotal ? 'PAID' : (paidAmount > 0 ? 'PARTIALLY_PAID' : 'UNPAID')),
       });
     }
 
-    // Security check: Only allow payment for approved / accepted proposals
-    if (proposalData) {
-      const status = (proposalData.status || '').toLowerCase();
-      const isApproved = status === 'accepted' || status === 'approved';
-      if (!isApproved) {
-        return res.status(403).json({
-          success: false,
-          error: 'Security Violation: Payment is only permitted for Approved proposals. Please approve the proposal first.',
-        });
-      }
+    const ip = (req.headers['x-forwarded-for'] as string || req.socket.remoteAddress || '').split(',')[0].trim() || 'client-verified';
+    const userAgent = (req.headers['user-agent'] as string || '').slice(0, 200) || 'web-browser';
 
-      if (proposalData.paymentStatus === 'Paid') {
+    const grandTotal = Number(dbProposal.grandTotal || 0);
+    const paidAmount = Number(dbProposal.paidAmount || dbProposal.amountPaid || 0);
+    const balanceDue = Math.max(0, grandTotal - paidAmount);
+    const initialPaymentStatus = paidAmount >= grandTotal ? 'PAID' : (paidAmount > 0 ? 'PARTIALLY_PAID' : 'UNPAID');
+
+    await updateDoc(found.ref, {
+      status: 'Accepted',
+      acceptedAt: nowIso,
+      acceptedBy: finalClientName,
+      customerIp: ip,
+      customerDevice: userAgent,
+      paymentStatus: initialPaymentStatus,
+      paidAmount,
+      amountPaid: paidAmount,
+      balanceDue,
+      updatedAt: nowIso,
+    });
+
+    // Create activity log: "Customer accepted proposal {proposalNumber}"
+    const actId = `act_${Date.now()}`;
+    await setDoc(doc(db, 'activities', actId), {
+      id: actId,
+      activityId: actId,
+      customerId: dbProposal.customerId,
+      userId: 'customer_link',
+      userName: finalClientName,
+      type: 'PROPOSAL_ACCEPTED',
+      title: `Customer accepted proposal ${dbProposal.proposalNumber}`,
+      description: `Customer accepted proposal ${dbProposal.proposalNumber}`,
+      relatedId: dbProposal.id,
+      timestamp: nowIso,
+      createdAt: nowIso,
+    }).catch(console.warn);
+
+    // Create notification: "Customer accepted Proposal {proposalNumber}"
+    const notifId = `notif_${Date.now()}`;
+    await setDoc(doc(db, 'notifications', notifId), {
+      id: notifId,
+      notificationId: `NOTIF-${Date.now().toString().slice(-6)}`,
+      userId: dbProposal.assignedEmployeeId || 'all_admins',
+      type: 'PROPOSAL_ACCEPTED',
+      title: `Customer accepted Proposal ${dbProposal.proposalNumber}`,
+      message: `Customer accepted Proposal ${dbProposal.proposalNumber}`,
+      relatedId: dbProposal.id,
+      relatedType: 'proposal',
+      read: false,
+      createdAt: nowIso,
+    }).catch(console.warn);
+
+    // Automatic email confirmation from sales@sparkgentechnology.in
+    sendProposalEmailNotification({
+      proposalNumber: dbProposal.proposalNumber,
+      customerEmail: dbProposal.customerEmail || dbProposal.customerSnapshot?.email,
+      customerName: finalClientName,
+      type: 'ACCEPTED',
+    }).catch(console.warn);
+
+    return res.json({
+      success: true,
+      message: 'Proposal Accepted Successfully',
+      status: 'Accepted',
+      proposalStatus: 'ACCEPTED',
+      acceptedBy: finalClientName,
+      acceptedAt: nowIso,
+      amountPayable: grandTotal,
+      amountPaid: paidAmount,
+      balanceDue,
+      paymentStatus: initialPaymentStatus,
+    });
+  } catch (err: any) {
+    console.error('[Proposal Accept Error]', err);
+    res.status(500).json({ success: false, error: err.message || 'Server error accepting proposal.' });
+  }
+});
+
+// 2. Create Cashfree Order for Accepted Proposal
+app.post('/api/payment/cashfree/create-order', async (req, res) => {
+  try {
+    const { proposalId, proposalNumber, viewToken, customerDetails, proposalData } = req.body;
+
+    // MANDATORY SECURITY VERIFICATION:
+    // Look up proposal from database directly — DO NOT TRUST frontend state or body flags!
+    const found = await findProposalDoc(proposalId || viewToken || proposalData?.id || proposalData?.viewToken, proposalNumber || proposalData?.proposalNumber);
+    if (!found) {
+      return res.status(404).json({
+        success: false,
+        error: 'Security Error: Proposal not found in database. Cannot create payment session.',
+      });
+    }
+
+    const dbProposal = found.data;
+    const dbStatus = String(dbProposal.status || '').toUpperCase();
+
+    if (dbStatus === 'CANCELLED') {
+      return res.status(400).json({
+        success: false,
+        error: 'Payment not allowed: This proposal has been cancelled.',
+      });
+    }
+
+    // The customer must NOT be able to bypass the acceptance requirement.
+    // Server-side payment creation must verify: proposalStatus === "ACCEPTED"
+    if (dbStatus !== 'ACCEPTED') {
+      return res.status(403).json({
+        success: false,
+        error: 'Security Violation: Payment is only permitted for ACCEPTED proposals. The proposal must be accepted first.',
+      });
+    }
+
+    // Expiry check
+    if (dbProposal.validUntil) {
+      const today = new Date().toISOString().split('T')[0];
+      if (dbProposal.validUntil < today) {
         return res.status(400).json({
           success: false,
-          error: 'Payment Completed: This proposal has already been paid in full.',
+          error: 'Payment not allowed: This proposal has expired.',
         });
       }
     }
+
+    // Server-side calculation of balanceDue (DO NOT trust frontend requested amounts)
+    const grandTotal = Number(dbProposal.grandTotal || 0);
+    const amountPaid = Number(dbProposal.paidAmount || dbProposal.amountPaid || 0);
+    const balanceDue = Math.max(0, grandTotal - amountPaid);
+
+    if (balanceDue <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Payment Completed: This proposal has already been paid in full.',
+      });
+    }
+
+    const orderAmount = parseFloat(balanceDue.toFixed(2));
 
     const config = getStoredPaymentConfig();
     const appId = config.cashfreeAppId;
@@ -991,31 +1260,22 @@ app.post('/api/payment/cashfree/create-order', async (req, res) => {
       });
     }
 
-    const rawAmount = proposalData?.grandTotal || verifiedAmount;
-    const orderAmount = parseFloat(Number(rawAmount).toFixed(2));
-    if (!orderAmount || isNaN(orderAmount) || orderAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid proposal payment amount.',
-      });
-    }
-
-    const propNum = proposalData?.proposalNumber || proposalNumber || 'PROP';
+    const propNum = dbProposal.proposalNumber || 'PROP';
     const cleanPropNum = propNum.replace(/[^a-zA-Z0-9_-]/g, '_');
     const orderId = `cf_ord_${cleanPropNum}_${Date.now()}`.slice(0, 45);
 
-    let rawPhone = customerDetails?.phone || proposalData?.customerMobile || '9876543210';
+    let rawPhone = customerDetails?.phone || dbProposal.customerMobile || dbProposal.customerSnapshot?.mobile || '9876543210';
     let cleanPhone = rawPhone.replace(/\D/g, '');
     if (cleanPhone.length > 10) cleanPhone = cleanPhone.slice(-10);
     if (cleanPhone.length < 10) cleanPhone = '9876543210';
 
-    const customerName = (customerDetails?.name || proposalData?.customerName || 'Valued Customer').slice(0, 50);
-    const customerEmail = customerDetails?.email || proposalData?.customerEmail || 'sales@sparkgentechnology.in';
-    const customerId = (proposalData?.customerId || `cust_${Date.now()}`).slice(0, 40);
+    const customerName = (customerDetails?.name || dbProposal.acceptedBy || dbProposal.customerName || 'Valued Customer').slice(0, 50);
+    const customerEmail = customerDetails?.email || dbProposal.customerEmail || dbProposal.customerSnapshot?.email || 'sales@sparkgentechnology.in';
+    const customerId = (dbProposal.customerId || `cust_${Date.now()}`).slice(0, 40);
 
     const baseUrl = isProd ? 'https://api.cashfree.com/pg' : 'https://sandbox.cashfree.com/pg';
     const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
-    const returnUrl = `${origin}/proposal/${proposalData?.viewToken || proposalId}?cf_order_id={order_id}`;
+    const returnUrl = `${origin}/proposal/${dbProposal.viewToken || dbProposal.id}?cf_order_id={order_id}`;
 
     const cashfreePayload = {
       order_id: orderId,
@@ -1030,10 +1290,10 @@ app.post('/api/payment/cashfree/create-order', async (req, res) => {
       order_meta: {
         return_url: returnUrl,
       },
-      order_note: `Payment for Commercial Proposal ${propNum}`,
+      order_note: `Payment for Commercial Proposal ${propNum} (Balance Due: ₹${orderAmount})`,
     };
 
-    console.log(`[Express Cashfree] Creating order ${orderId} for ₹${orderAmount} on ${baseUrl}`);
+    console.log(`[Express Cashfree] Creating order ${orderId} for balance due ₹${orderAmount} on ${baseUrl}`);
 
     const cfResponse = await fetch(`${baseUrl}/orders`, {
       method: 'POST',
@@ -1061,6 +1321,7 @@ app.post('/api/payment/cashfree/create-order', async (req, res) => {
       paymentSessionId: cfData.payment_session_id,
       orderId: cfData.order_id,
       amount: orderAmount,
+      balanceDue: orderAmount,
       currency: 'INR',
       environment: isProd ? 'production' : 'sandbox',
       cfOrderId: cfData.cf_order_id,
@@ -1071,10 +1332,12 @@ app.post('/api/payment/cashfree/create-order', async (req, res) => {
   }
 });
 
-// B. Verify Cashfree Payment with Cashfree Server Directly
+// 3. Verify Cashfree Payment with Cashfree Server Directly & Update ERP
 const handleCashfreeVerify = async (req: any, res: any) => {
   try {
     const orderId = req.query.orderId || req.query.order_id || req.body?.orderId || req.body?.order_id;
+    const proposalIdentifier = req.query.proposalId || req.body?.proposalId || req.body?.proposalNumber;
+
     if (!orderId) {
       return res.status(400).json({ success: false, error: 'orderId is required for Cashfree verification.' });
     }
@@ -1144,13 +1407,145 @@ const handleCashfreeVerify = async (req: any, res: any) => {
     }
 
     if (orderStatus === 'PAID') {
+      const newlyPaid = Number(orderData.order_amount || 0);
+
+      // Find proposal from Firestore
+      let targetProposalDoc = await findProposalDoc(proposalIdentifier);
+      if (!targetProposalDoc) {
+        // Fallback: search by cashfreeOrderId matching orderId
+        try {
+          const q = query(collection(db, 'proposals'), where('cashfreeOrderId', '==', orderId));
+          const qs = await getDocs(q);
+          if (!qs.empty) {
+            const d = qs.docs[0];
+            targetProposalDoc = { ref: d.ref, data: { id: d.id, ...d.data() } as any };
+          }
+        } catch (e) {}
+      }
+
+      let updatedGrandTotal = 0;
+      let newAmountPaid = newlyPaid;
+      let newBalanceDue = 0;
+      let newPaymentStatus: 'PAID' | 'PARTIALLY_PAID' = 'PAID';
+
+      if (targetProposalDoc) {
+        const dbProp = targetProposalDoc.data;
+        updatedGrandTotal = Number(dbProp.grandTotal || 0);
+        const currentPaid = Number(dbProp.paidAmount || dbProp.amountPaid || 0);
+        newAmountPaid = Math.min(updatedGrandTotal, currentPaid + newlyPaid);
+        newBalanceDue = Math.max(0, updatedGrandTotal - newAmountPaid);
+        newPaymentStatus = newBalanceDue <= 0 ? 'PAID' : 'PARTIALLY_PAID';
+
+        const existingHistory = Array.isArray(dbProp.paymentHistory) ? dbProp.paymentHistory : [];
+        const isAlreadyInHistory = existingHistory.some((h: any) => h.paymentId === paymentId || h.orderId === orderId);
+
+        const updatedHistory = isAlreadyInHistory
+          ? existingHistory
+          : [
+              ...existingHistory,
+              {
+                id: `pay_hist_${Date.now()}`,
+                paymentId,
+                orderId,
+                amount: newlyPaid,
+                currency: orderData.order_currency || 'INR',
+                date: paymentTime,
+                status: 'PAID',
+                method: paymentMethod,
+              },
+            ];
+
+        // 8. Update payment record
+        // 9. Update amountPaid
+        // 10. Update balanceDue
+        // 11. Update paymentStatus
+        await updateDoc(targetProposalDoc.ref, {
+          paymentStatus: newPaymentStatus,
+          paidAmount: newAmountPaid,
+          amountPaid: newAmountPaid,
+          balanceDue: newBalanceDue,
+          paymentDate: paymentTime,
+          cashfreeOrderId: orderId,
+          cashfreePaymentId: paymentId,
+          cashfreePaymentMethod: paymentMethod,
+          paymentGatewayUsed: 'cashfree',
+          paymentHistory: updatedHistory,
+          updatedAt: paymentTime,
+        }).catch(console.warn);
+
+        // Store payment record in /payments
+        const paymentRecordId = `pay_${Date.now()}`;
+        await setDoc(doc(db, 'payments', paymentRecordId), {
+          id: paymentRecordId,
+          proposalId: dbProp.id,
+          proposalNumber: dbProp.proposalNumber,
+          customerId: dbProp.customerId,
+          customerName: dbProp.customerName,
+          amount: newlyPaid,
+          currency: orderData.order_currency || 'INR',
+          status: 'PAID',
+          paymentMethod,
+          gateway: 'cashfree',
+          gatewayPaymentId: paymentId,
+          gatewayOrderId: orderId,
+          createdAt: paymentTime,
+          date: paymentTime,
+        }).catch(console.warn);
+
+        // Activity log: "Payment received for Proposal {proposalNumber}"
+        const actId = `act_${Date.now()}`;
+        await setDoc(doc(db, 'activities', actId), {
+          id: actId,
+          activityId: actId,
+          customerId: dbProp.customerId,
+          userId: 'customer_link',
+          userName: 'Customer (Cashfree)',
+          type: 'PAYMENT_RECEIVED',
+          title: `Payment received for Proposal ${dbProp.proposalNumber}`,
+          description: `Payment received for Proposal ${dbProp.proposalNumber}`,
+          relatedId: dbProp.id,
+          timestamp: paymentTime,
+          createdAt: paymentTime,
+        }).catch(console.warn);
+
+        // Admin notification: "Payment received for Proposal {proposalNumber}"
+        const notifId = `notif_${Date.now()}`;
+        await setDoc(doc(db, 'notifications', notifId), {
+          id: notifId,
+          notificationId: `NOTIF-${Date.now().toString().slice(-6)}`,
+          userId: dbProp.assignedEmployeeId || 'all_admins',
+          type: 'PAYMENT_RECEIVED',
+          title: `Payment received for Proposal ${dbProp.proposalNumber}`,
+          message: `Payment received for Proposal ${dbProp.proposalNumber}`,
+          relatedId: dbProp.id,
+          relatedType: 'proposal',
+          read: false,
+          createdAt: paymentTime,
+        }).catch(console.warn);
+
+        // Automatic email from sales@sparkgentechnology.in: Subject: Payment Received - {Proposal Number}
+        sendProposalEmailNotification({
+          proposalNumber: dbProp.proposalNumber,
+          customerEmail: dbProp.customerEmail || dbProp.customerSnapshot?.email,
+          customerName: dbProp.acceptedBy || dbProp.customerName,
+          type: 'PAID',
+          amount: newlyPaid,
+          paymentId,
+        }).catch(console.warn);
+      }
+
       return res.json({
         success: true,
         verified: true,
-        status: 'Paid',
+        status: newPaymentStatus,
+        paymentStatus: newPaymentStatus,
         orderId,
         cfOrderId: orderData.cf_order_id,
-        paidAmount: orderData.order_amount,
+        paidAmount: newlyPaid,
+        amountPaid: newAmountPaid,
+        totalPaidAmount: newAmountPaid,
+        balanceDue: newBalanceDue,
+        remainingBalance: newBalanceDue,
         currency: orderData.order_currency || 'INR',
         paymentId,
         paymentMethod,
@@ -1162,7 +1557,8 @@ const handleCashfreeVerify = async (req: any, res: any) => {
       return res.json({
         success: false,
         verified: false,
-        status: orderStatus === 'ACTIVE' ? 'Pending' : (orderStatus === 'CANCELLED' ? 'Cancelled' : 'Failed'),
+        status: orderStatus === 'ACTIVE' ? 'Pending' : (orderStatus === 'CANCELLED' ? 'CANCELLED' : 'FAILED'),
+        paymentStatus: orderStatus === 'ACTIVE' ? 'Pending' : (orderStatus === 'CANCELLED' ? 'CANCELLED' : 'FAILED'),
         orderId,
         paidAmount: orderData.order_amount,
         message: `Cashfree order status is ${orderStatus}. Payment has not been captured.`,
@@ -1177,7 +1573,7 @@ const handleCashfreeVerify = async (req: any, res: any) => {
 app.post('/api/payment/cashfree/verify', handleCashfreeVerify);
 app.get('/api/payment/cashfree/verify', handleCashfreeVerify);
 
-// C. Cashfree Webhook Handler
+// 4. Cashfree Webhook Handler
 app.post('/api/payment/cashfree/webhook', (req, res) => {
   const payload = req.body || {};
   console.log(`[Express Cashfree Webhook] Event: ${payload.type || 'PAYMENT_EVENT'} for order: ${payload.data?.order?.order_id || 'unknown'}`);

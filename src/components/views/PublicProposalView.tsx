@@ -54,7 +54,16 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Client Decision Action
+  // Proposal Acceptance States & Dialog
+  const [showAcceptDialog, setShowAcceptDialog] = useState(false);
+  const [signatoryName, setSignatoryName] = useState('');
+  const [acceptSuccessData, setAcceptSuccessData] = useState<{
+    acceptedBy: string;
+    acceptedAt: string;
+    proposalStatus: string;
+  } | null>(null);
+
+  // Client Decision Action (Reject or Accept fallback)
   const [clientDecision, setClientDecision] = useState<'accept' | 'reject' | null>(null);
   const [clientName, setClientName] = useState('');
   const [decisionNotes, setDecisionNotes] = useState('');
@@ -66,8 +75,9 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [paymentSuccessData, setPaymentSuccessData] = useState<{
     orderId?: string;
-    paidAmount?: number;
-    paymentId?: string;
+    paidAmount: number;
+    paymentId: string;
+    remainingBalance: number;
     paymentDate?: string;
   } | null>(null);
 
@@ -228,11 +238,38 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
     }).catch(console.warn);
   };
 
+  const paymentHistoryList = useMemo(() => {
+    if (!proposal) return [];
+    if (Array.isArray(proposal.paymentHistory) && proposal.paymentHistory.length > 0) {
+      return proposal.paymentHistory;
+    }
+    const paidAmt = Number(proposal.paidAmount || proposal.amountPaid || 0);
+    if (paidAmt > 0) {
+      return [
+        {
+          id: 'pay_hist_0',
+          paymentId: proposal.cashfreePaymentId || proposal.cashfreeOrderId || 'CF-VERIFIED',
+          amount: paidAmt,
+          date: proposal.paymentDate || proposal.updatedAt || new Date().toISOString(),
+          status: 'PAID',
+        },
+      ];
+    }
+    return [];
+  }, [proposal]);
+
+  // Prefill signatory name once proposal is loaded
+  useEffect(() => {
+    if (proposal && !signatoryName) {
+      setSignatoryName(proposal.customerSnapshot?.contactPerson || proposal.customerName || '');
+    }
+  }, [proposal?.id]);
+
   // Listen for redirect return from Cashfree checkout
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const cfOrderId = params.get('cf_order_id') || params.get('order_id');
-    if (cfOrderId && proposal && proposal.paymentStatus !== 'Paid') {
+    if (cfOrderId && proposal && proposal.paymentStatus !== 'PAID' && proposal.paymentStatus !== 'Paid') {
       verifyAndFinalizePayment(cfOrderId);
     }
   }, [proposal?.id]);
@@ -250,74 +287,61 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
       let verifyData: any = null;
       try { verifyData = JSON.parse(rawText); } catch {}
 
-      if (verifyData && verifyData.verified && verifyData.status === 'Paid') {
+      if (verifyData && verifyData.verified && (verifyData.status === 'Paid' || verifyData.status === 'PAID' || verifyData.paymentStatus === 'PAID' || verifyData.paymentStatus === 'PARTIALLY_PAID')) {
         const nowIso = verifyData.paymentDate || new Date().toISOString();
-        const paidAmount = Number(verifyData.paidAmount || proposal?.grandTotal || 0);
-        const paymentId = verifyData.paymentId || `PAY-${orderId}`;
+        const newlyPaid = Number(verifyData.paidAmount || 0);
+        const totalPaidAmount = Number(verifyData.totalPaidAmount || verifyData.amountPaid || (proposal?.paidAmount || 0) + newlyPaid);
+        const remainingBal = verifyData.balanceDue !== undefined ? Number(verifyData.balanceDue) : Math.max(0, (proposal?.grandTotal || 0) - totalPaidAmount);
+        const paymentId = verifyData.paymentId || `cf_pay_${orderId}`;
+        const newPaymentStatus = remainingBal <= 0 ? 'PAID' : 'PARTIALLY_PAID';
 
         if (proposal) {
-          const propRef = doc(db, 'proposals', proposal.id);
-          await updateDoc(propRef, {
-            paymentStatus: 'Paid',
-            paidAmount,
-            paymentDate: nowIso,
-            cashfreeOrderId: orderId,
-            cashfreePaymentId: paymentId,
-            cashfreePaymentMethod: verifyData.paymentMethod || 'Online',
-            paymentGatewayUsed: 'cashfree',
-            updatedAt: nowIso,
+          setProposal((prev) => {
+            if (!prev) return null;
+            const existingHistory = Array.isArray(prev.paymentHistory) ? prev.paymentHistory : [];
+            const alreadyHas = existingHistory.some(h => h.paymentId === paymentId || h.orderId === orderId);
+            const updatedHistory = alreadyHas
+              ? existingHistory
+              : [
+                  ...existingHistory,
+                  {
+                    id: `pay_hist_${Date.now()}`,
+                    paymentId,
+                    orderId,
+                    amount: newlyPaid,
+                    currency: 'INR',
+                    date: nowIso,
+                    status: 'PAID',
+                    method: verifyData.paymentMethod || 'Online',
+                  },
+                ];
+
+            return {
+              ...prev,
+              paymentStatus: newPaymentStatus,
+              paidAmount: totalPaidAmount,
+              amountPaid: totalPaidAmount,
+              balanceDue: remainingBal,
+              paymentDate: nowIso,
+              cashfreeOrderId: orderId,
+              cashfreePaymentId: paymentId,
+              cashfreePaymentMethod: verifyData.paymentMethod || 'Online',
+              paymentGatewayUsed: 'cashfree',
+              paymentHistory: updatedHistory,
+            };
           });
-
-          const actId = `act_${Date.now()}`;
-          await setDoc(doc(db, 'activities', actId), {
-            id: actId,
-            customerId: proposal.customerId,
-            title: `Proposal Payment Received: ${proposal.proposalNumber}`,
-            description: `Payment of ₹${paidAmount.toLocaleString('en-IN')} received via Cashfree for proposal ${proposal.proposalNumber} [Order: ${orderId}]`,
-            type: 'PAYMENT_RECEIVED',
-            timestamp: nowIso,
-            createdAt: nowIso,
-          }).catch(console.warn);
-
-          const notifId = `notif_${Date.now()}`;
-          await setDoc(doc(db, 'notifications', notifId), {
-            id: notifId,
-            notificationId: `NOTIF-${Date.now().toString().slice(-6)}`,
-            userId: proposal.assignedEmployeeId || 'all_admins',
-            type: 'PROPOSAL_PAID',
-            title: `Proposal Paid 💰: ${proposal.proposalNumber}`,
-            message: `Payment of ₹${paidAmount.toLocaleString('en-IN')} confirmed via Cashfree for proposal ${proposal.proposalNumber}.`,
-            relatedId: proposal.id,
-            relatedType: 'proposal',
-            read: false,
-            createdAt: nowIso,
-          }).catch(console.warn);
-
-          setProposal((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  paymentStatus: 'Paid',
-                  paidAmount,
-                  paymentDate: nowIso,
-                  cashfreeOrderId: orderId,
-                  cashfreePaymentId: paymentId,
-                  cashfreePaymentMethod: verifyData.paymentMethod || 'Online',
-                  paymentGatewayUsed: 'cashfree',
-                }
-              : null
-          );
         }
 
         setPaymentSuccessData({
           orderId,
-          paidAmount,
+          paidAmount: newlyPaid || totalPaidAmount,
           paymentId,
+          remainingBalance: remainingBal,
           paymentDate: nowIso,
         });
       } else {
         if (verifyData && !verifyData.verified) {
-          setPaymentError(verifyData.message || 'Payment not completed or pending. Please try again if amount was not deducted.');
+          setPaymentError(verifyData.message || 'Payment not captured or pending. Please try again if amount was not deducted.');
         }
       }
     } catch (err: any) {
@@ -327,14 +351,73 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
     }
   };
 
+  const handleConfirmAcceptProposal = async () => {
+    if (!proposal) return;
+    setSubmitting(true);
+    const nowIso = new Date().toISOString();
+    const finalSigner = (signatoryName.trim() || proposal.customerSnapshot?.contactPerson || proposal.customerName || 'Customer Representative').trim();
+
+    try {
+      // 1. Validate & accept on server (creates activity, notification, Titan email)
+      const res = await fetch('/api/proposal/accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          proposalId: proposal.id,
+          proposalNumber: proposal.proposalNumber,
+          viewToken: proposal.viewToken || proposalIdOrNumber,
+          customerName: finalSigner,
+          clientName: finalSigner,
+        }),
+      });
+
+      const acceptRes = await res.json().catch(() => ({}));
+      if (!res.ok && !acceptRes.alreadyAccepted) {
+        throw new Error(acceptRes.error || 'Failed to accept proposal.');
+      }
+
+      const acceptedTime = acceptRes.acceptedAt || nowIso;
+      const grandTotal = Number(proposal.grandTotal || 0);
+      const currentPaid = Number(proposal.paidAmount || proposal.amountPaid || 0);
+      const balanceDue = Math.max(0, grandTotal - currentPaid);
+      const newPayStatus = currentPaid >= grandTotal ? 'PAID' : (currentPaid > 0 ? 'PARTIALLY_PAID' : 'UNPAID');
+
+      // Update local proposal state
+      setProposal((prev) => prev ? {
+        ...prev,
+        status: 'Accepted',
+        acceptedAt: acceptedTime,
+        acceptedBy: finalSigner,
+        paymentStatus: newPayStatus,
+        paidAmount: currentPaid,
+        amountPaid: currentPaid,
+        balanceDue,
+      } : null);
+
+      setAcceptSuccessData({
+        acceptedBy: finalSigner,
+        acceptedAt: acceptedTime,
+        proposalStatus: 'ACCEPTED',
+      });
+
+      setShowAcceptDialog(false);
+    } catch (err: any) {
+      console.error('[Accept Proposal Error]', err);
+      alert(err.message || 'Failed to accept proposal. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handlePayWithCashfree = async () => {
     if (!proposal) return;
-    const isApproved = proposal.status === 'Accepted' || proposal.status === 'Approved';
-    if (!isApproved) {
-      alert('Please approve the proposal before making payment.');
+    const currentStatus = String(proposal.status || '').toUpperCase();
+    if (currentStatus !== 'ACCEPTED') {
+      alert('Security Notice: You must accept the proposal before making a payment.');
       return;
     }
-    if (proposal.paymentStatus === 'Paid') {
+    const balance = proposal.balanceDue !== undefined ? Number(proposal.balanceDue) : Math.max(0, (proposal.grandTotal || 0) - (proposal.paidAmount || 0));
+    if (balance <= 0) {
       alert('This proposal has already been paid in full.');
       return;
     }
@@ -349,18 +432,11 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
         body: JSON.stringify({
           proposalId: proposal.id,
           proposalNumber: proposal.proposalNumber,
-          verifiedAmount: proposal.grandTotal,
-          proposalData: {
-            id: proposal.id,
-            proposalNumber: proposal.proposalNumber,
-            grandTotal: proposal.grandTotal,
-            customerId: proposal.customerId,
-            customerName: proposal.customerName,
-            customerEmail: proposal.customerEmail,
-            customerMobile: proposal.customerMobile,
-            status: proposal.status,
-            paymentStatus: proposal.paymentStatus,
-            viewToken: proposal.viewToken || proposalIdOrNumber,
+          viewToken: proposal.viewToken || proposalIdOrNumber,
+          customerDetails: {
+            name: proposal.acceptedBy || proposal.customerName,
+            email: proposal.customerEmail || proposal.customerSnapshot?.email,
+            phone: proposal.customerMobile || proposal.customerSnapshot?.mobile,
           },
         }),
       });
@@ -588,7 +664,17 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
   };
 
   const bank = proposal.bankSnapshot;
-  const isTerminal = proposal.status === 'Accepted' || proposal.status === 'Rejected' || proposal.status === 'Cancelled' || isExpired;
+
+  const isCancelled = (proposal.status || '').toUpperCase() === 'CANCELLED';
+  const proposalStatus = (proposal.status || 'DRAFT').toUpperCase();
+  const isAccepted = proposalStatus === 'ACCEPTED' || proposal.status === 'Accepted';
+
+  const amountPayable = Number(proposal.grandTotal || 0);
+  const amountPaid = Number(proposal.paidAmount || proposal.amountPaid || 0);
+  const balanceDue = proposal.balanceDue !== undefined ? Number(proposal.balanceDue) : Math.max(0, amountPayable - amountPaid);
+  const paymentStatus = (proposal.paymentStatus || (amountPaid >= amountPayable && amountPayable > 0 ? 'PAID' : (amountPaid > 0 ? 'PARTIALLY_PAID' : 'UNPAID'))).toUpperCase();
+
+  const isTerminal = isAccepted || proposal.status === 'Rejected' || isCancelled || isExpired;
 
   return (
     <div className="min-h-screen bg-slate-100 antialiased text-slate-900 py-8 px-4 sm:px-6 lg:px-8">
@@ -616,24 +702,24 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
           <div className="flex items-center gap-2">
             <button
               onClick={handleDownloadPdf}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" /> Download Official PDF
             </button>
 
-            {(proposal.status === 'Accepted' || proposal.status === 'Approved') && (
+            {isAccepted && (
               <span className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold shadow-2xs">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Proposal Approved
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" /> ✓ Proposal Accepted
               </span>
             )}
 
             {!isTerminal && (
               <>
                 <button
-                  onClick={() => setClientDecision('accept')}
+                  onClick={() => setShowAcceptDialog(true)}
                   className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors cursor-pointer"
                 >
-                  <CheckCircle className="w-3.5 h-3.5" /> Approve Proposal
+                  <CheckCircle className="w-3.5 h-3.5" /> Accept Proposal
                 </button>
                 <button
                   onClick={() => setClientDecision('reject')}
@@ -1017,154 +1103,447 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
           </div>
         </div>
 
-        {/* PAYMENT SECTION — Appears Directly Below Approved Proposal */}
-        {(proposal.status === 'Accepted' || proposal.status === 'Approved') && (
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
-            {/* Header: Proposal Approved Confirmation */}
-            <div className="bg-emerald-700 text-white p-6 sm:p-7 flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center">
-                  <CheckCircle2 className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <h3 className="text-base sm:text-lg font-black tracking-tight">✓ Proposal Approved</h3>
-                  <p className="text-xs text-emerald-100">
-                    {proposal.acceptedBy ? `Acknowledged by ${proposal.acceptedBy.replace(' (Response submitted through proposal link)', '')}` : 'Commercial terms accepted'}
-                    {proposal.acceptedAt && ` on ${new Date(proposal.acceptedAt).toLocaleDateString('en-IN')}`}
-                  </p>
-                </div>
+        {/* ================================================================ */}
+        {/* PROPOSAL ACCEPTANCE & PAYMENT SECTION                            */}
+        {/* ================================================================ */}
+        <div id="proposal-acceptance-section" className="space-y-6">
+          {/* If Proposal is CANCELLED: Hide Accept Proposal and Pay Now */}
+          {isCancelled ? (
+            <div className="bg-rose-50 border border-rose-200 rounded-3xl p-6 sm:p-8 text-center space-y-2">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+                <XCircle className="w-6 h-6" />
               </div>
-
-              {proposal.paymentStatus === 'Paid' ? (
-                <span className="px-3 py-1 bg-white text-emerald-800 rounded-full text-xs font-black uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
-                  <Check className="w-3.5 h-3.5" /> Payment Status: Paid
-                </span>
-              ) : (
-                <span className="px-3 py-1 bg-emerald-800 text-emerald-100 rounded-full text-xs font-bold uppercase tracking-wider">
-                  Payment Status: {proposal.paymentStatus || 'Pending'}
-                </span>
-              )}
+              <h3 className="text-base font-bold text-rose-950">Proposal Cancelled</h3>
+              <p className="text-xs text-rose-700 max-w-md mx-auto">
+                This commercial proposal has been cancelled. Proposal acceptance and online payments are unavailable.
+              </p>
             </div>
-
-            <div className="p-6 sm:p-8 space-y-6">
-              {/* If Already Paid */}
-              {proposal.paymentStatus === 'Paid' ? (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 space-y-4">
+          ) : (
+            <>
+              {/* -------------------------------- */}
+              {/* PROPOSAL ACCEPTANCE              */}
+              {/* -------------------------------- */}
+              <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
+                <div className="bg-slate-900 text-white p-6 sm:p-7 flex items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black">
-                      ✓
+                    <div className="w-10 h-10 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center">
+                      <ShieldCheck className="w-5 h-5 text-indigo-400" />
                     </div>
                     <div>
-                      <h4 className="text-base font-bold text-emerald-950">Payment Successful</h4>
-                      <p className="text-xs text-emerald-700">
-                        Thank you! Your payment has been received and verified securely by Cashfree.
-                      </p>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-300 block">
+                        Commercial Verification
+                      </span>
+                      <h3 className="text-base sm:text-lg font-black tracking-tight">
+                        PROPOSAL ACCEPTANCE
+                      </h3>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-emerald-200/80 text-xs">
-                    <div className="bg-white p-3 rounded-xl border border-emerald-200">
-                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Amount Paid</span>
-                      <span className="text-base font-black font-mono text-emerald-800">
-                        ₹{(proposal.paidAmount || proposal.grandTotal).toLocaleString('en-IN')}
-                      </span>
-                    </div>
-
-                    <div className="bg-white p-3 rounded-xl border border-emerald-200">
-                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Payment Reference ID</span>
-                      <span className="text-xs font-bold font-mono text-slate-800 block truncate">
-                        {proposal.cashfreePaymentId || proposal.cashfreeOrderId || 'CF-VERIFIED'}
-                      </span>
-                    </div>
-
-                    <div className="bg-white p-3 rounded-xl border border-emerald-200">
-                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Payment Date</span>
-                      <span className="text-xs font-bold font-mono text-slate-800">
-                        {proposal.paymentDate
-                          ? new Date(proposal.paymentDate).toLocaleDateString('en-IN', {
-                              day: '2-digit',
-                              month: '2-digit',
-                              year: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })
-                          : new Date().toLocaleDateString('en-IN')}
-                      </span>
-                    </div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                        isAccepted
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : isExpired
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                          : 'bg-white/10 text-slate-300 border border-white/10'
+                      }`}
+                    >
+                      Proposal Status: {proposalStatus}
+                    </span>
                   </div>
                 </div>
-              ) : (
-                /* Payment Pending: Show Payment Summary & Pay Now Button */
-                <div className="space-y-6">
-                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-200 pb-4">
-                      <div>
-                        <h4 className="text-sm font-bold text-slate-900">Payment Summary</h4>
-                        <p className="text-xs text-slate-500">
-                          Complete your commercial confirmation using Cashfree Payment Gateway
-                        </p>
-                      </div>
-                      <span className="px-3 py-1 bg-amber-100 text-amber-800 border border-amber-200 rounded-full text-xs font-bold">
-                        Payment Status: Pending
-                      </span>
-                    </div>
 
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2">
-                      <div>
-                        <span className="text-xs text-slate-500 block">Total Payable Amount:</span>
-                        <div className="text-2xl sm:text-3xl font-black font-mono text-indigo-700">
-                          ₹{proposal.grandTotal.toLocaleString('en-IN')}
+                <div className="p-6 sm:p-8 space-y-6">
+                  {/* If Proposal is NOT ACCEPTED yet */}
+                  {!isAccepted ? (
+                    <div className="space-y-5">
+                      <p className="text-xs sm:text-sm text-slate-600 leading-relaxed max-w-2xl font-medium">
+                        Please review the proposal details carefully. By clicking Accept Proposal, you confirm that you accept the proposal terms and pricing.
+                      </p>
+
+                      {isExpired && (
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center gap-2 font-medium">
+                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                          <span>This proposal expired on {proposal.validUntil}. Acceptance is disabled.</span>
                         </div>
-                        <span className="text-[11px] text-slate-400 italic block mt-0.5">
-                          Indian Rupees {numberToWordsINR(proposal.grandTotal)} Only
-                        </span>
-                      </div>
+                      )}
 
-                      <div className="w-full sm:w-auto">
+                      <div>
                         <button
                           type="button"
-                          onClick={handlePayWithCashfree}
-                          disabled={isProcessingPayment}
-                          className="w-full sm:w-auto px-8 py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 text-white rounded-xl text-sm font-bold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
+                          onClick={() => setShowAcceptDialog(true)}
+                          disabled={isExpired || submitting}
+                          className="px-8 py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-bold shadow-md hover:shadow-lg transition-all flex items-center gap-2 cursor-pointer"
                         >
-                          {isProcessingPayment ? (
-                            <>
-                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                              <span>Opening Cashfree Checkout...</span>
-                            </>
-                          ) : (
-                            <>
-                              <CreditCard className="w-4 h-4" />
-                              <span>Pay Now</span>
-                              <ArrowRight className="w-4 h-4" />
-                            </>
-                          )}
+                          <CheckCircle className="w-4 h-4" />
+                          <span>Accept Proposal</span>
                         </button>
                       </div>
                     </div>
-                  </div>
+                  ) : (
+                    /* Once accepted, customer should NOT see Accept Proposal again. Instead show: */
+                    <div className="space-y-4">
+                      {acceptSuccessData && (
+                        <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl flex items-center gap-3 text-emerald-900 shadow-xs">
+                          <CheckCircle className="w-6 h-6 text-emerald-600 shrink-0" />
+                          <div>
+                            <h4 className="font-bold text-sm">Proposal Accepted Successfully</h4>
+                            <p className="text-xs text-emerald-700">
+                              Your commercial confirmation has been recorded and registered in our system.
+                            </p>
+                          </div>
+                        </div>
+                      )}
 
-                  {paymentError && (
-                    <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-xs text-rose-800">
-                      <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
-                      <div>
-                        <span className="font-bold block">Payment Incomplete</span>
-                        <span>{paymentError}</span>
+                      <div className="p-5 bg-emerald-50/70 border border-emerald-200 rounded-2xl space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black">
+                            ✓
+                          </div>
+                          <div>
+                            <h4 className="text-base font-bold text-emerald-950">✓ Proposal Accepted</h4>
+                            <p className="text-xs text-emerald-700 font-medium">
+                              Accepted on: {proposal.acceptedAt ? new Date(proposal.acceptedAt).toLocaleString('en-IN', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              }) : 'Recorded'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-emerald-200/80 text-xs">
+                          <div className="bg-white p-3 rounded-xl border border-emerald-200">
+                            <span className="text-[10px] text-slate-400 uppercase font-bold block">Accepted By</span>
+                            <span className="font-semibold text-slate-900 block truncate">
+                              {proposal.acceptedBy ? proposal.acceptedBy.replace(' (Response submitted through proposal link)', '') : (proposal.customerSnapshot?.contactPerson || proposal.customerName)}
+                            </span>
+                          </div>
+
+                          <div className="bg-white p-3 rounded-xl border border-emerald-200">
+                            <span className="text-[10px] text-slate-400 uppercase font-bold block">Accepted At</span>
+                            <span className="font-mono text-slate-800">
+                              {proposal.acceptedAt ? new Date(proposal.acceptedAt).toLocaleString('en-IN') : '-'}
+                            </span>
+                          </div>
+
+                          <div className="bg-white p-3 rounded-xl border border-emerald-200">
+                            <span className="text-[10px] text-slate-400 uppercase font-bold block">Proposal Status</span>
+                            <span className="font-bold text-emerald-700 uppercase">
+                              ACCEPTED
+                            </span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-3 text-slate-400 text-xs pt-2">
-                    <div className="flex items-center gap-2">
-                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                      <span>256-bit Encrypted Security via Cashfree Payments</span>
+              {/* -------------------------------- */}
+              {/* PAYMENT SECTION                  */}
+              {/* (Only shown when proposalStatus === ACCEPTED) */}
+              {/* -------------------------------- */}
+              {isAccepted && (
+                <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
+                  <div className="bg-linear-to-r from-indigo-900 to-slate-900 text-white p-6 sm:p-7 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center">
+                        <CreditCard className="w-5 h-5 text-indigo-300" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-300 block">
+                          Commercial Remittance
+                        </span>
+                        <h3 className="text-base sm:text-lg font-black tracking-tight">
+                          PAYMENT
+                        </h3>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 font-mono text-[11px]">
-                      <span>Supports: UPI • Credit/Debit Cards • Net Banking • Wallets</span>
+
+                    <div>
+                      <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                        balanceDue === 0 || paymentStatus === 'PAID'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      }`}>
+                        Payment Status: {paymentStatus}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-6 sm:p-8 space-y-6">
+                    {/* Amount Summary Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl">
+                        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                          Amount Payable
+                        </span>
+                        <span className="text-xl sm:text-2xl font-black font-mono text-slate-900 block mt-1">
+                          ₹{amountPayable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl">
+                        <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">
+                          Amount Paid
+                        </span>
+                        <span className="text-xl sm:text-2xl font-black font-mono text-emerald-800 block mt-1">
+                          ₹{amountPaid.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      <div className={`p-4 rounded-2xl border ${
+                        balanceDue > 0
+                          ? 'bg-indigo-50/80 border-indigo-200'
+                          : 'bg-slate-50 border-slate-200'
+                      }`}>
+                        <span className={`text-[11px] font-bold uppercase tracking-wider block ${
+                          balanceDue > 0 ? 'text-indigo-700' : 'text-slate-400'
+                        }`}>
+                          Balance Due
+                        </span>
+                        <span className={`text-xl sm:text-2xl font-black font-mono block mt-1 ${
+                          balanceDue > 0 ? 'text-indigo-900' : 'text-slate-600'
+                        }`}>
+                          ₹{balanceDue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* If Payment Successful Callout */}
+                    {paymentSuccessData && (
+                      <div className="p-5 bg-emerald-50 border border-emerald-300 rounded-2xl space-y-3">
+                        <div className="flex items-center gap-2.5">
+                          <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
+                          <h4 className="text-sm font-bold text-emerald-950">✓ Payment Successful</h4>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1">
+                          <div>
+                            <span className="text-slate-500 block">Amount Paid:</span>
+                            <span className="font-mono font-bold text-emerald-800 text-sm">
+                              ₹{paymentSuccessData.paidAmount.toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block">Payment ID:</span>
+                            <span className="font-mono text-slate-800 font-semibold truncate block">
+                              {paymentSuccessData.paymentId}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block">Remaining Balance:</span>
+                            <span className="font-mono font-bold text-slate-800 text-sm">
+                              ₹{paymentSuccessData.remainingBalance.toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* PAY NOW VISIBILITY RULE:
+                        IF proposalStatus == ACCEPTED AND balanceDue > 0: Show Pay Now.
+                        IF proposalStatus == ACCEPTED AND balanceDue == 0: Hide Pay Now and show: ✓ Payment Completed / ✓ Fully Paid
+                    */}
+                    {balanceDue > 0 ? (
+                      <div className="pt-2 space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-slate-50 border border-slate-200 rounded-2xl">
+                          <div>
+                            <h4 className="text-sm font-bold text-slate-900">Proceed to Cashfree Checkout</h4>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              Pay outstanding balance of ₹{balanceDue.toLocaleString('en-IN')} securely via UPI, Cards, Net Banking
+                            </p>
+                          </div>
+
+                          <div>
+                            <button
+                              type="button"
+                              onClick={handlePayWithCashfree}
+                              disabled={isProcessingPayment || isExpired}
+                              className="w-full sm:w-auto px-8 py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-bold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
+                            >
+                              {isProcessingPayment ? (
+                                <>
+                                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                  <span>Opening Cashfree Checkout...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <CreditCard className="w-4 h-4" />
+                                  <span>PAY NOW</span>
+                                  <ArrowRight className="w-4 h-4" />
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        {paymentError && (
+                          <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-xs text-rose-800">
+                            <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                            <div>
+                              <span className="font-bold block">Payment Incomplete</span>
+                              <span>{paymentError}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex flex-wrap items-center justify-between gap-3 text-slate-400 text-xs">
+                          <div className="flex items-center gap-2">
+                            <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                            <span>256-bit Encrypted Security via Cashfree Payments</span>
+                          </div>
+                          <div className="flex items-center gap-2 font-mono text-[11px]">
+                            <span>Supports: UPI • Cards • Net Banking • Wallets</span>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* balanceDue === 0: Hide Pay Now and show: ✓ Payment Completed / ✓ Fully Paid */
+                      <div className="p-6 bg-emerald-50 border border-emerald-300 rounded-2xl flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold">
+                            ✓
+                          </div>
+                          <div>
+                            <h4 className="text-base font-bold text-emerald-950">✓ Payment Completed</h4>
+                            <p className="text-xs text-emerald-700">
+                              This commercial proposal is fully paid in full.
+                            </p>
+                          </div>
+                        </div>
+
+                        <span className="px-4 py-1.5 bg-emerald-600 text-white rounded-full text-xs font-bold shadow-xs">
+                          ✓ Fully Paid
+                        </span>
+                      </div>
+                    )}
+
+                    {/* PAYMENT HISTORY TABLE */}
+                    <div className="mt-8 pt-6 border-t border-slate-200">
+                      <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider mb-3">
+                        Payment History
+                      </h4>
+
+                      {paymentHistoryList.length > 0 ? (
+                        <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                              <tr>
+                                <th className="py-2.5 px-4 font-semibold">Date</th>
+                                <th className="py-2.5 px-4 font-semibold text-right">Amount</th>
+                                <th className="py-2.5 px-4 font-semibold text-center">Status</th>
+                                <th className="py-2.5 px-4 font-semibold font-mono">Payment ID</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {paymentHistoryList.map((item, idx) => (
+                                <tr key={idx} className="hover:bg-slate-50/50">
+                                  <td className="py-2.5 px-4 text-slate-700">
+                                    {new Date(item.date).toLocaleString('en-IN', {
+                                      day: '2-digit',
+                                      month: 'short',
+                                      year: 'numeric',
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </td>
+                                  <td className="py-2.5 px-4 text-right font-mono font-bold text-emerald-700">
+                                    ₹{Number(item.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="py-2.5 px-4 text-center">
+                                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      {item.status || 'PAID'}
+                                    </span>
+                                  </td>
+                                  <td className="py-2.5 px-4 font-mono text-slate-600 text-[11px]">
+                                    {item.paymentId || item.orderId || '-'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-400 text-center">
+                          No payment records found yet.
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
               )}
+            </>
+          )}
+        </div>
+
+        {/* ACCEPT PROPOSAL CONFIRMATION DIALOG MODAL */}
+        {showAcceptDialog && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+            <div className="bg-white rounded-3xl border border-slate-200 max-w-md w-full p-6 sm:p-7 space-y-5 shadow-2xl">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center">
+                  <CheckCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Accept Proposal</h3>
+                  <p className="text-xs text-slate-500">Commercial Proposal #{proposal.proposalNumber}</p>
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2 text-xs text-slate-700">
+                <p className="font-semibold text-slate-900 text-sm">
+                  Are you sure you want to accept this proposal?
+                </p>
+                <p className="text-slate-500 leading-relaxed text-[11px]">
+                  By confirming, you accept the commercial proposal terms, scope of work, and pricing of ₹{amountPayable.toLocaleString('en-IN')}.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Authorized Signatory / Customer Representative *
+                </label>
+                <input
+                  type="text"
+                  value={signatoryName}
+                  onChange={(e) => setSignatoryName(e.target.value)}
+                  placeholder="Enter authorized customer name"
+                  className="w-full text-xs border border-slate-300 rounded-xl px-3.5 py-2.5 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAcceptDialog(false)}
+                  disabled={submitting}
+                  className="px-5 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmAcceptProposal}
+                  disabled={submitting}
+                  className="px-6 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  {submitting ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Accepting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Accept Proposal</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         )}

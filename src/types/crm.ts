@@ -1091,15 +1091,30 @@ export interface ProposalRecord {
   viewedAt?: string;
   acceptedAt?: string;
   acceptedBy?: string;
+  customerIp?: string;
+  customerDevice?: string;
   rejectedAt?: string;
   rejectionReason?: string;
-  paymentStatus?: 'Not Required' | 'Pending' | 'Paid' | 'Failed' | 'Cancelled';
+  paymentStatus?: 'UNPAID' | 'PARTIALLY_PAID' | 'PAID' | 'FAILED' | 'CANCELLED' | 'Pending' | 'Paid' | 'Not Required' | string;
   paidAmount?: number;
+  amountPaid?: number; // alias
+  balanceDue?: number;
   paymentDate?: string;
   cashfreeOrderId?: string;
   cashfreePaymentId?: string;
   cashfreePaymentMethod?: string;
   paymentGatewayUsed?: string;
+  paymentHistory?: Array<{
+    id?: string;
+    paymentId: string;
+    amount: number;
+    currency?: string;
+    date: string;
+    status: string;
+    method?: string;
+    orderId?: string;
+    reference?: string;
+  }>;
   createdAt: string;
   updatedAt: string;
 }

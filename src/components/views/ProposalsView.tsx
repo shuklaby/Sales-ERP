@@ -21,6 +21,7 @@ import {
   History,
   FileCheck,
   CreditCard,
+  ShieldCheck,
 } from 'lucide-react';
 import { ProposalRecord, ProposalStatus, InvoiceRecord } from '../../types/crm';
 import { useCrmData } from '../../context/CrmDataContext';
@@ -663,50 +664,213 @@ export const ProposalsView: React.FC<ProposalsViewProps> = ({
                 </div>
               </div>
 
-              {/* Payment & Cashfree Gateway Details Card */}
-              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-900 block text-xs uppercase tracking-wider flex items-center gap-1.5">
-                    <CreditCard className="w-3.5 h-3.5 text-indigo-600" /> Payment & Gateway Details
-                  </span>
-                  <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                    previewProposal.paymentStatus === 'Paid'
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      : previewProposal.paymentStatus === 'Pending' || previewProposal.status === 'Accepted'
-                      ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                      : 'bg-slate-200 text-slate-700'
-                  }`}>
-                    Payment: {previewProposal.paymentStatus || (previewProposal.status === 'Accepted' ? 'Pending' : 'Not Required')}
-                  </span>
-                </div>
+              {/* Admin Proposal Details: Status, Acceptance & Payment Card */}
+              {(() => {
+                const adminPropStatus = (previewProposal.status || 'DRAFT').toUpperCase();
+                const isPropAccepted = adminPropStatus === 'ACCEPTED' || !!previewProposal.acceptedAt;
+                const propGrandTotal = Number(previewProposal.grandTotal || 0);
+                const propPaidAmt = Number(previewProposal.paidAmount || previewProposal.amountPaid || 0);
+                const propBalanceDue = previewProposal.balanceDue !== undefined ? Number(previewProposal.balanceDue) : Math.max(0, propGrandTotal - propPaidAmt);
+                
+                let rawPayStatus = (previewProposal.paymentStatus || '').toUpperCase();
+                if (!rawPayStatus || rawPayStatus === 'PENDING' || rawPayStatus === 'NOT REQUIRED') {
+                  rawPayStatus = propPaidAmt >= propGrandTotal && propGrandTotal > 0 ? 'PAID' : (propPaidAmt > 0 ? 'PARTIALLY_PAID' : 'UNPAID');
+                }
+                const adminPayStatus = rawPayStatus;
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-1">
-                  <div>
-                    <span className="text-[10px] text-slate-400 block">Payment Status</span>
-                    <span className="font-bold text-slate-800">
-                      {previewProposal.paymentStatus || (previewProposal.status === 'Accepted' ? 'Pending' : 'Not Required')}
-                    </span>
+                const histList = (previewProposal.paymentHistory && previewProposal.paymentHistory.length > 0)
+                  ? previewProposal.paymentHistory
+                  : (propPaidAmt > 0
+                    ? [{
+                        paymentId: previewProposal.cashfreePaymentId || previewProposal.cashfreeOrderId || 'CF-VERIFIED',
+                        amount: propPaidAmt,
+                        status: 'PAID',
+                        date: previewProposal.paymentDate || previewProposal.updatedAt || previewProposal.createdAt || new Date().toISOString(),
+                      }]
+                    : []);
+
+                return (
+                  <div className="bg-slate-50 rounded-2xl border border-slate-200 p-5 space-y-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                          <ShieldCheck className="w-4 h-4 text-indigo-600" />
+                          Commercial Proposal & Payment Audit
+                        </h4>
+                        <span className="text-[11px] text-slate-500 font-mono">
+                          ID: {previewProposal.proposalNumber}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase ${
+                          adminPropStatus === 'ACCEPTED'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            : adminPropStatus === 'REJECTED'
+                            ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                            : adminPropStatus === 'EXPIRED'
+                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            : adminPropStatus === 'CANCELLED'
+                            ? 'bg-red-100 text-red-800 border border-red-300'
+                            : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                        }`}>
+                          Proposal Status: {adminPropStatus}
+                        </span>
+
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase ${
+                          adminPayStatus === 'PAID'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            : adminPayStatus === 'PARTIALLY_PAID'
+                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            : 'bg-slate-200 text-slate-700 border border-slate-300'
+                        }`}>
+                          Payment Status: {adminPayStatus}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Acceptance Details */}
+                    <div className="bg-white p-4 rounded-xl border border-slate-200">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-2">
+                        Proposal Acceptance
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block">Acceptance:</span>
+                          <span className={`font-bold inline-flex items-center gap-1 mt-0.5 ${
+                            isPropAccepted ? 'text-emerald-700' : 'text-slate-600'
+                          }`}>
+                            {isPropAccepted ? '✓ Accepted' : 'Not Accepted'}
+                          </span>
+                        </div>
+
+                        <div>
+                          <span className="text-[10px] text-slate-400 block">Accepted At:</span>
+                          <span className="font-mono text-slate-800 font-semibold block mt-0.5">
+                            {previewProposal.acceptedAt ? new Date(previewProposal.acceptedAt).toLocaleString('en-IN') : 'N/A'}
+                          </span>
+                        </div>
+
+                        <div>
+                          <span className="text-[10px] text-slate-400 block">Accepted By:</span>
+                          <span className="text-slate-800 font-semibold block mt-0.5 truncate">
+                            {previewProposal.acceptedBy ? previewProposal.acceptedBy.replace(' (Response submitted through proposal link)', '') : (previewProposal.customerEmail || previewProposal.customerSnapshot?.email || 'N/A')}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Commercial Amounts Breakdown */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold block">Amount:</span>
+                        <span className="text-base font-black font-mono text-slate-900 block mt-0.5">
+                          ₹{propGrandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200">
+                        <span className="text-[10px] text-emerald-700 uppercase font-bold block">Amount Paid:</span>
+                        <span className="text-base font-black font-mono text-emerald-800 block mt-0.5">
+                          ₹{propPaidAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      <div className={`p-3.5 rounded-xl border ${
+                        propBalanceDue > 0 ? 'bg-indigo-50/60 border-indigo-200' : 'bg-white border-slate-200'
+                      }`}>
+                        <span className={`text-[10px] uppercase font-bold block ${
+                          propBalanceDue > 0 ? 'text-indigo-700' : 'text-slate-400'
+                        }`}>Balance Due:</span>
+                        <span className={`text-base font-black font-mono block mt-0.5 ${
+                          propBalanceDue > 0 ? 'text-indigo-900' : 'text-slate-700'
+                        }`}>
+                          ₹{propBalanceDue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Cashfree Payment Gateway Reference */}
+                    <div className="bg-white p-3.5 rounded-xl border border-slate-200 text-xs">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block">Payment Gateway</span>
+                          <span className="font-semibold text-slate-800">Cashfree</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 block">Cashfree Order ID</span>
+                          <span className="font-mono text-slate-800 truncate block">
+                            {previewProposal.cashfreeOrderId || 'None'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 block">Payment ID</span>
+                          <span className="font-mono text-slate-800 truncate block">
+                            {previewProposal.cashfreePaymentId || 'None'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 block">Payment Date</span>
+                          <span className="text-slate-800 font-mono">
+                            {previewProposal.paymentDate ? new Date(previewProposal.paymentDate).toLocaleDateString('en-IN') : 'N/A'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Payment History */}
+                    <div>
+                      <h5 className="font-bold text-slate-800 text-xs uppercase tracking-wider mb-2">
+                        Payment History
+                      </h5>
+                      {histList.length > 0 ? (
+                        <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                              <tr>
+                                <th className="py-2 px-3 font-semibold">Date</th>
+                                <th className="py-2 px-3 font-semibold text-right">Amount</th>
+                                <th className="py-2 px-3 font-semibold text-center">Status</th>
+                                <th className="py-2 px-3 font-semibold font-mono">Payment ID</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {histList.map((item: any, idx: number) => (
+                                <tr key={idx}>
+                                  <td className="py-2 px-3 text-slate-700">
+                                    {new Date(item.date).toLocaleString('en-IN', {
+                                      day: '2-digit',
+                                      month: 'short',
+                                      year: 'numeric',
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </td>
+                                  <td className="py-2 px-3 text-right font-mono font-bold text-emerald-700">
+                                    ₹{Number(item.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="py-2 px-3 text-center">
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      {item.status || 'PAID'}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-3 font-mono text-slate-600 text-[11px]">
+                                    {item.paymentId || item.orderId || '-'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="p-3 bg-white rounded-xl border border-slate-200 text-slate-400 text-center text-xs">
+                          No payment history recorded yet.
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 block">Paid Amount</span>
-                    <span className="font-mono font-bold text-emerald-700">
-                      {previewProposal.paidAmount ? `₹${previewProposal.paidAmount.toLocaleString('en-IN')}` : '₹0.00'}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 block">Cashfree Order ID</span>
-                    <span className="font-mono text-slate-800 truncate block">
-                      {previewProposal.cashfreeOrderId || previewProposal.cashfreePaymentId || 'None'}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 block">Payment Date</span>
-                    <span className="text-slate-800">
-                      {previewProposal.paymentDate ? new Date(previewProposal.paymentDate).toLocaleString('en-IN') : 'N/A'}
-                    </span>
-                  </div>
-                </div>
-              </div>
+                );
+              })()}
 
               {/* Customer Snapshot Card (Section 4) */}
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">

@@ -187,7 +187,7 @@ service cloud.firestore {
       allow create: if isSuperAdmin() || isActiveEmployee();
       allow update: if isSuperAdmin() ||
         (isActiveEmployee() && (resource.data.assignedEmployeeId == request.auth.uid || resource.data.createdBy == request.auth.uid)) ||
-        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt', 'acceptedBy', 'rejectedAt', 'rejectionReason', 'viewedAt', 'updatedAt', 'paymentStatus', 'paidAmount', 'paymentDate', 'cashfreeOrderId', 'cashfreePaymentId', 'cashfreePaymentMethod', 'paymentGatewayUsed']));
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt', 'acceptedBy', 'rejectedAt', 'rejectionReason', 'viewedAt', 'updatedAt', 'paymentStatus', 'paidAmount', 'amountPaid', 'balanceDue', 'paymentDate', 'cashfreeOrderId', 'cashfreePaymentId', 'cashfreePaymentMethod', 'paymentGatewayUsed', 'paymentHistory', 'customerIp', 'customerDevice']));
       allow delete: if isSuperAdmin();
     }
     match /proposals/{proposalId}/items/{itemId} {
@@ -327,7 +327,8 @@ service cloud.firestore {
 
     match /payments/{paymentId} {
       allow read: if true;
-      allow create, update: if isSuperAdmin() || isActiveEmployee();
+      allow create: if true;
+      allow update: if isSuperAdmin() || isActiveEmployee();
       allow delete: if isSuperAdmin();
     }
 
