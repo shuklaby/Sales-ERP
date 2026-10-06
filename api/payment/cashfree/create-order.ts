@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { findProposalInFirestore } from '../../_firestoreRest';
 
 function getStoredPaymentConfig(): any {
   const tmpPath = path.resolve('/tmp', '.payment-config.json');
@@ -74,34 +75,58 @@ export default async function handler(req: any, res: any) {
 
   try {
     const body = await parseJsonBody(req);
-    const { proposalId, proposalNumber, verifiedAmount, customerDetails, proposalData } = body;
+    const { proposalId, proposalNumber, viewToken, customerDetails, proposalData } = body;
 
-    if (!proposalId && !proposalNumber) {
-      return sendJson(res, 400, {
+    // Look up proposal from database directly — DO NOT TRUST frontend state or body flags
+    const lookupKey = proposalId || viewToken || proposalData?.id || proposalData?.viewToken;
+    const targetNum = proposalNumber || proposalData?.proposalNumber;
+
+    const found = await findProposalInFirestore(lookupKey, targetNum);
+    if (!found) {
+      return sendJson(res, 404, {
         success: false,
-        error: 'Missing proposal identifier. proposalId or proposalNumber is required.',
+        error: 'Security Error: Proposal not found in database. Cannot create payment session.',
       });
     }
 
-    // -------------------------------------------------------------
-    // Security Checks: Proposal Approval & Status Verification
-    // -------------------------------------------------------------
-    if (proposalData) {
-      const status = (proposalData.status || '').toLowerCase();
-      const isApproved = status === 'accepted' || status === 'approved';
-      if (!isApproved) {
-        return sendJson(res, 403, {
-          success: false,
-          error: 'Security Violation: Payment is only permitted for Approved proposals. Please approve the proposal first.',
-        });
-      }
+    const dbProposal = found.data;
+    const dbStatus = String(dbProposal.status || '').toUpperCase();
 
-      if (proposalData.paymentStatus === 'Paid') {
+    if (dbStatus === 'CANCELLED') {
+      return sendJson(res, 400, {
+        success: false,
+        error: 'Payment not allowed: This proposal has been cancelled.',
+      });
+    }
+
+    // Server-side payment creation must verify: proposalStatus === "ACCEPTED"
+    if (dbStatus !== 'ACCEPTED') {
+      return sendJson(res, 403, {
+        success: false,
+        error: 'Security Violation: Payment is only permitted for ACCEPTED proposals. The proposal must be accepted first.',
+      });
+    }
+
+    // Expiry check
+    if (dbProposal.validUntil) {
+      const today = new Date().toISOString().split('T')[0];
+      if (dbProposal.validUntil < today) {
         return sendJson(res, 400, {
           success: false,
-          error: 'Payment Completed: This proposal has already been paid in full.',
+          error: 'Payment not allowed: This proposal has expired.',
         });
       }
+    }
+
+    const grandTotal = Number(dbProposal.grandTotal || 0);
+    const amountPaid = Number(dbProposal.paidAmount || dbProposal.amountPaid || 0);
+    const balanceDue = Math.max(0, grandTotal - amountPaid);
+
+    if (balanceDue <= 0) {
+      return sendJson(res, 400, {
+        success: false,
+        error: 'Payment Completed: This proposal has already been paid in full.',
+      });
     }
 
     const config = getStoredPaymentConfig();
@@ -116,9 +141,7 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    // Enforce verified amount (never allow client-tampered 0 or arbitrary amounts)
-    const rawAmount = proposalData?.grandTotal || verifiedAmount;
-    const orderAmount = parseFloat(Number(rawAmount).toFixed(2));
+    const orderAmount = parseFloat(balanceDue.toFixed(2));
     if (!orderAmount || isNaN(orderAmount) || orderAmount <= 0) {
       return sendJson(res, 400, {
         success: false,
@@ -126,19 +149,19 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const propNum = proposalData?.proposalNumber || proposalNumber || 'PROP';
+    const propNum = dbProposal.proposalNumber || proposalNumber || 'PROP';
     const cleanPropNum = propNum.replace(/[^a-zA-Z0-9_-]/g, '_');
     const orderId = `cf_ord_${cleanPropNum}_${Date.now()}`.slice(0, 45);
 
     // Format Indian mobile number for Cashfree requirement (10 digits)
-    let rawPhone = customerDetails?.phone || proposalData?.customerMobile || '9876543210';
+    let rawPhone = customerDetails?.phone || dbProposal.customerMobile || dbProposal.customerSnapshot?.mobile || '9876543210';
     let cleanPhone = rawPhone.replace(/\D/g, '');
     if (cleanPhone.length > 10) cleanPhone = cleanPhone.slice(-10);
     if (cleanPhone.length < 10) cleanPhone = '9876543210';
 
-    const customerName = (customerDetails?.name || proposalData?.customerName || 'Valued Customer').slice(0, 50);
-    const customerEmail = customerDetails?.email || proposalData?.customerEmail || 'sales@sparkgentechnology.in';
-    const customerId = (proposalData?.customerId || `cust_${Date.now()}`).slice(0, 40);
+    const customerName = (customerDetails?.name || dbProposal.acceptedBy || dbProposal.customerName || 'Valued Customer').slice(0, 50);
+    const customerEmail = customerDetails?.email || dbProposal.customerEmail || dbProposal.customerSnapshot?.email || 'sales@sparkgentechnology.in';
+    const customerId = (dbProposal.customerId || `cust_${Date.now()}`).slice(0, 40);
 
     const baseUrl = isProd ? 'https://api.cashfree.com/pg' : 'https://sandbox.cashfree.com/pg';
 

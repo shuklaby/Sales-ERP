@@ -353,13 +353,84 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
 
   const handleConfirmAcceptProposal = async () => {
     if (!proposal) return;
+
+    // 9. DUPLICATE ACCEPTANCE GUARD
+    const currentStatus = String(proposal.status || '').toUpperCase();
+    if (currentStatus === 'ACCEPTED') {
+      alert('This proposal has already been accepted.');
+      setShowAcceptDialog(false);
+      return;
+    }
+
     setSubmitting(true);
     const nowIso = new Date().toISOString();
-    const finalSigner = (signatoryName.trim() || proposal.customerSnapshot?.contactPerson || proposal.customerName || 'Customer Representative').trim();
+    const finalSigner = (signatoryName.trim() || proposal.customerSnapshot?.contactPerson || proposal.customerName || 'Authorized Customer Representative').trim();
+
+    const grandTotal = Number(proposal.grandTotal || 0);
+    const currentPaid = Number(proposal.paidAmount || proposal.amountPaid || 0);
+    const balanceDue = Math.max(0, grandTotal - currentPaid);
+    const newPayStatus = currentPaid >= grandTotal ? 'PAID' : (currentPaid > 0 ? 'PARTIALLY_PAID' : 'UNPAID');
 
     try {
-      // 1. Validate & accept on server (creates activity, notification, Titan email)
-      const res = await fetch('/api/proposal/accept', {
+      // 1. Direct Firestore Update (Client SDK with verified security rules)
+      const propRef = doc(db, 'proposals', proposal.id);
+      await updateDoc(propRef, {
+        status: 'Accepted',
+        acceptedAt: nowIso,
+        acceptedBy: finalSigner,
+        paymentStatus: newPayStatus,
+        paidAmount: currentPaid,
+        amountPaid: currentPaid,
+        balanceDue,
+        updatedAt: nowIso,
+      });
+
+      // 2. Record Customer Acceptance Event in proposalViews
+      const eventId = `resp_${Date.now()}`;
+      setDoc(doc(db, 'proposalViews', eventId), {
+        id: eventId,
+        proposalId: proposal.id,
+        proposalNumber: proposal.proposalNumber,
+        viewerToken: proposal.viewToken || proposalIdOrNumber,
+        eventType: 'ACCEPTED',
+        customerResponse: 'Accepted',
+        acceptedBy: finalSigner,
+        timestamp: nowIso,
+      }).catch(console.warn);
+
+      // 3. Create Activity Log in Firestore
+      const actId = `act_${Date.now()}`;
+      setDoc(doc(db, 'activities', actId), {
+        id: actId,
+        activityId: actId,
+        customerId: proposal.customerId || '',
+        userId: 'customer_link',
+        userName: finalSigner,
+        type: 'PROPOSAL_ACCEPTED',
+        title: `Customer accepted proposal ${proposal.proposalNumber}`,
+        description: `Customer accepted proposal ${proposal.proposalNumber}`,
+        relatedId: proposal.id,
+        timestamp: nowIso,
+        createdAt: nowIso,
+      }).catch(console.warn);
+
+      // 4. Create Admin Notification in Firestore
+      const notifId = `notif_${Date.now()}`;
+      setDoc(doc(db, 'notifications', notifId), {
+        id: notifId,
+        notificationId: `NOTIF-${Date.now().toString().slice(-6)}`,
+        userId: proposal.assignedEmployeeId || 'all_admins',
+        type: 'PROPOSAL_ACCEPTED',
+        title: `Customer accepted Proposal ${proposal.proposalNumber}`,
+        message: `Customer accepted Proposal ${proposal.proposalNumber}`,
+        relatedId: proposal.id,
+        relatedType: 'proposal',
+        read: false,
+        createdAt: nowIso,
+      }).catch(console.warn);
+
+      // 5. Trigger Backend API for Server Synchronization & Titan Email Confirmation
+      fetch('/api/proposal/accept', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -369,24 +440,15 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
           customerName: finalSigner,
           clientName: finalSigner,
         }),
+      }).catch((apiErr) => {
+        console.warn('[Backend Sync Notice] Secondary acceptance API sync notice:', apiErr);
       });
 
-      const acceptRes = await res.json().catch(() => ({}));
-      if (!res.ok && !acceptRes.alreadyAccepted) {
-        throw new Error(acceptRes.error || 'Failed to accept proposal.');
-      }
-
-      const acceptedTime = acceptRes.acceptedAt || nowIso;
-      const grandTotal = Number(proposal.grandTotal || 0);
-      const currentPaid = Number(proposal.paidAmount || proposal.amountPaid || 0);
-      const balanceDue = Math.max(0, grandTotal - currentPaid);
-      const newPayStatus = currentPaid >= grandTotal ? 'PAID' : (currentPaid > 0 ? 'PARTIALLY_PAID' : 'UNPAID');
-
-      // Update local proposal state
+      // 6. Update local proposal state immediately
       setProposal((prev) => prev ? {
         ...prev,
         status: 'Accepted',
-        acceptedAt: acceptedTime,
+        acceptedAt: nowIso,
         acceptedBy: finalSigner,
         paymentStatus: newPayStatus,
         paidAmount: currentPaid,
@@ -396,14 +458,14 @@ export const PublicProposalView: React.FC<PublicProposalViewProps> = ({ proposal
 
       setAcceptSuccessData({
         acceptedBy: finalSigner,
-        acceptedAt: acceptedTime,
+        acceptedAt: nowIso,
         proposalStatus: 'ACCEPTED',
       });
 
       setShowAcceptDialog(false);
     } catch (err: any) {
       console.error('[Accept Proposal Error]', err);
-      alert(err.message || 'Failed to accept proposal. Please try again.');
+      alert('Unable to accept proposal. Please try again or contact support.');
     } finally {
       setSubmitting(false);
     }

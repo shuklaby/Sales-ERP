@@ -1,5 +1,12 @@
 import fs from 'fs';
 import path from 'path';
+import nodemailer from 'nodemailer';
+import { getStoredEmailConfig } from '../../_emailService';
+import {
+  findProposalInFirestore,
+  patchProposalInFirestore,
+  createDocumentInFirestore,
+} from '../../_firestoreRest';
 
 function getStoredPaymentConfig(): any {
   const tmpPath = path.resolve('/tmp', '.payment-config.json');
@@ -162,13 +169,147 @@ export default async function handler(req: any, res: any) {
     }
 
     if (orderStatus === 'PAID') {
+      const newlyPaid = Number(orderData.order_amount || 0);
+      let totalPaidAmount = newlyPaid;
+      let remainingBalance = 0;
+      let finalPaymentStatus: 'PAID' | 'PARTIALLY_PAID' = 'PAID';
+
+      // Update proposal in Firestore if proposalId is provided
+      if (proposalId) {
+        try {
+          const found = await findProposalInFirestore(proposalId);
+          if (found) {
+            const dbProp = found.data;
+            const grandTotal = Number(dbProp.grandTotal || 0);
+            const prevPaid = Number(dbProp.paidAmount || dbProp.amountPaid || 0);
+            totalPaidAmount = prevPaid + newlyPaid;
+            remainingBalance = Math.max(0, grandTotal - totalPaidAmount);
+            finalPaymentStatus = remainingBalance <= 0 ? 'PAID' : 'PARTIALLY_PAID';
+
+            const existingHistory = Array.isArray(dbProp.paymentHistory) ? dbProp.paymentHistory : [];
+            const alreadyLogged = existingHistory.some((h: any) => h.orderId === orderId || h.paymentId === paymentId);
+
+            const updatedHistory = alreadyLogged
+              ? existingHistory
+              : [
+                  ...existingHistory,
+                  {
+                    id: `pay_hist_${Date.now()}`,
+                    paymentId,
+                    orderId,
+                    amount: newlyPaid,
+                    currency: orderData.order_currency || 'INR',
+                    date: paymentTime,
+                    status: 'PAID',
+                    method: paymentMethod,
+                  },
+                ];
+
+            await patchProposalInFirestore(found.id, {
+              paymentStatus: finalPaymentStatus,
+              paidAmount: totalPaidAmount,
+              amountPaid: totalPaidAmount,
+              balanceDue: remainingBalance,
+              paymentDate: paymentTime,
+              cashfreeOrderId: orderId,
+              cashfreePaymentId: paymentId,
+              cashfreePaymentMethod: paymentMethod,
+              paymentGatewayUsed: 'cashfree',
+              paymentHistory: updatedHistory,
+              updatedAt: paymentTime,
+            });
+
+            // Record in /payments collection
+            const payDocId = `pay_${orderId}`;
+            createDocumentInFirestore('payments', payDocId, {
+              id: payDocId,
+              orderId,
+              paymentId,
+              proposalId: found.id,
+              proposalNumber: dbProp.proposalNumber || '',
+              customerId: dbProp.customerId || '',
+              customerName: dbProp.customerName || '',
+              amount: newlyPaid,
+              currency: orderData.order_currency || 'INR',
+              status: 'PAID',
+              paymentGateway: 'cashfree',
+              paymentMethod,
+              timestamp: paymentTime,
+              createdAt: paymentTime,
+            }).catch(console.warn);
+
+            // Log activity: "Payment received for Proposal {proposalNumber}"
+            const actId = `act_${Date.now()}`;
+            createDocumentInFirestore('activities', actId, {
+              id: actId,
+              activityId: actId,
+              customerId: dbProp.customerId || '',
+              userId: 'cashfree_gateway',
+              userName: 'Cashfree Gateway',
+              type: 'PAYMENT_RECEIVED',
+              title: `Payment received for Proposal ${dbProp.proposalNumber || found.id}`,
+              description: `Payment of ₹${newlyPaid} received via Cashfree for proposal ${dbProp.proposalNumber || found.id}`,
+              relatedId: found.id,
+              timestamp: paymentTime,
+              createdAt: paymentTime,
+            }).catch(console.warn);
+
+            // Create notification: "Payment received for Proposal {proposalNumber}"
+            const notifId = `notif_${Date.now()}`;
+            createDocumentInFirestore('notifications', notifId, {
+              id: notifId,
+              notificationId: `NOTIF-${Date.now().toString().slice(-6)}`,
+              userId: dbProp.assignedEmployeeId || 'all_admins',
+              type: 'PAYMENT_RECEIVED',
+              title: `Payment received for Proposal ${dbProp.proposalNumber || found.id}`,
+              message: `Payment of ₹${newlyPaid} received for Proposal ${dbProp.proposalNumber || found.id}`,
+              relatedId: found.id,
+              relatedType: 'proposal',
+              read: false,
+              createdAt: paymentTime,
+            }).catch(console.warn);
+
+            // Send confirmation email via Titan Mail (non-blocking)
+            try {
+              const emailCfg = getStoredEmailConfig();
+              const effectivePass = emailCfg.smtpPass || process.env.SMTP_PASSWORD || process.env.SMTP_PASS;
+              if (effectivePass && emailCfg.smtpUser) {
+                const transporter = nodemailer.createTransport({
+                  host: emailCfg.smtpHost || 'smtp.titan.email',
+                  port: emailCfg.smtpPort ? Number(emailCfg.smtpPort) : 465,
+                  secure: emailCfg.smtpPort === 465 || emailCfg.smtpSecure !== false,
+                  auth: { user: emailCfg.smtpUser.trim(), pass: effectivePass },
+                  tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' },
+                });
+                const recipient = dbProp.customerEmail || dbProp.customerSnapshot?.email || emailCfg.senderEmail;
+                transporter.sendMail({
+                  from: `"${emailCfg.senderName || 'SparkGenTechnology'}" <${emailCfg.senderEmail || 'sales@sparkgentechnology.in'}>`,
+                  to: recipient,
+                  cc: 'sales@sparkgentechnology.in',
+                  subject: `Payment Received - ${dbProp.proposalNumber || found.id}`,
+                  text: `Thank you for your payment of ₹${newlyPaid} for proposal ${dbProp.proposalNumber || found.id}.\nPayment ID: ${paymentId}\nRemaining Balance: ₹${remainingBalance}`,
+                }).catch(console.warn);
+              }
+            } catch (mailErr) {
+              console.warn('[Auto-Email Notice] Payment email notification error:', mailErr);
+            }
+          }
+        } catch (dbErr) {
+          console.warn('[Cashfree Verify] Firestore update warning:', dbErr);
+        }
+      }
+
       return sendJson(res, 200, {
         success: true,
         verified: true,
         status: 'Paid',
+        paymentStatus: finalPaymentStatus,
         orderId,
         cfOrderId: orderData.cf_order_id,
-        paidAmount: orderData.order_amount,
+        paidAmount: newlyPaid,
+        totalPaidAmount,
+        amountPaid: totalPaidAmount,
+        balanceDue: remainingBalance,
         currency: orderData.order_currency || 'INR',
         paymentId,
         paymentMethod,
